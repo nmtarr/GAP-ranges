@@ -1,13 +1,13 @@
 #NOTE! this is overwritten by some notebooks, so update everywhere, if adding lines.
-sp_id = 'agofrx0'
-summary_name = 'gophrog'
-gbif_req_id = 'GBIFr10'
-gbif_filter_id = 'GBIFf5'
+sp_id = 'bwewax0'
+summary_name = 'wormie'
+gbif_req_id = 'GBIFr16'
+gbif_filter_id = 'GBIFf4'
 ebird_req_id = None
 ebird_filter_id = None
 evaluation = 'eval_gbif1'
 workDir = '/Users/nmtarr/Documents/RANGES/'
-codeDir = '/Users/nmtarr/Code/GAP_range_evaluation/'
+codeDir = '/Users/nmtarr/Code/GAP-range-evaluation/'
 inDir = workDir + 'Inputs/'
 outDir = workDir + 'Outputs/'
 default_coordUncertainty = 500
