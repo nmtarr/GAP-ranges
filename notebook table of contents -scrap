@@ -1,0 +1,18 @@
+This notebook details an evaluation of the GAP range data for this species with occurrence data retrieved from databases such as GBIF via APIs.  The primary results are some maps for visualization, columns added to a GAP range data .csv file that is downloaded from ScienceBase, and documentation of decisions and archiving of data used. 
+
+See the README.md file in this repository for more information.
+
+### Evaluation Parameters
+This process requires some decision making about how to filter the records and other things.  Such decisions are documented in a database that can be queried in the other steps and referred to later for reference.
+
+### Occurrence Record Retrieval
+The user identifies the sqlite db containing occurrence records that they want to use and the code connects with it.
+
+### GAP Known Range Data Evaluation
+GAP ranges exist in table form in a database and on ScienceBase.  Ranges can be compared to occurrence circles to find HUCs where GAP was correct about species' presence and where it was wrong about absence.  The results of those comparisons can be saved in columns in the range tables.
+
+### Summary of Results
+Provide summaries of interest regarding how many hucs were validated etc.
+
+### Automated Range Delineation?
+The occurrence record database populated for range evaluation could also be a source for range delineation: either by an expert or with an automated process.  Spatialite has a concave hull function that can be deployed.  I generated seasonal, yearly, and monthly range maps with that process, but they were of poor quality. 
