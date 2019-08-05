@@ -1,11 +1,9 @@
 """
-This code must be run in the sqlite3 command line interface until packaged
-within python code.
-
-Uses occurrence data collected with 'retrieve_occurrences.py' to evaluate the
-GAP range map for a species.  A table is created for the GAP range and columns
-reporting the results of evaluation and validation are populated after
-evaluating spatial relationships of occurrence records (circles) and GAP range.
+Uses occurrence data collected with the wildlife sightings wrangler reporting
+to evaluate the GAP range map for a species.  A table is created for the GAP
+range and columns reporting the results of evaluation and validation are
+populated after evaluating spatial relationships of occurrence records (circles)
+and GAP range.
 
 The results of this code are new columns in the GAP range table (in the db
 created for work in this repository) and a range shapefile.
@@ -28,15 +26,12 @@ summary_name = config.summary_name
 gbif_req_id = config.gbif_req_id
 gbif_filter_id = config.gbif_filter_id
 outDir = config.outDir
-shucLoc = '/users/nmtarr/data/SHUCS'
+shucLoc = config.shucLoc
 
 # Create or connect to the range_evaluation database and eval parameters db
 conn2 = sqlite3.connect(config.inDir + 'parameters.sqlite')
 cursor2 = conn2.cursor()
-sql_tax = """SELECT gap_id FROM species_concepts
-             WHERE species_id = '{0}';""".format(config.sp_id)
-gap_id = cursor2.execute(sql_tax).fetchone()[0]
-gap_id = gap_id[0] + gap_id[1:5] + gap_id[5]
+gap_id = config.sp_id
 
 # Range evaluation database.
 eval_db = outDir + gap_id + '_range.sqlite'
@@ -46,19 +41,19 @@ conn.enable_load_extension(True)
 conn.execute('SELECT load_extension("mod_spatialite")')
 cursor = conn.cursor()
 
-# Get eval_gbif1 months and years
+# Get evaluation months and years
 months = cursor2.execute("SELECT months "
                         "FROM evaluations "
-                        "WHERE evaluation_id = 'eval_gbif1'").fetchone()[0]
+                        "WHERE evaluation_id = '{0}'".format(config.evaluation)).fetchone()[0]
 years = cursor2.execute("SELECT years "
                         "FROM evaluations "
-                        "WHERE evaluation_id = 'eval_gbif1'").fetchone()[0]
+                        "WHERE evaluation_id = '{0}'".format(config.evaluation)).fetchone()[0]
 
 sql="""
 ATTACH DATABASE '/users/nmtarr/documents/ranges/outputs/{0}_occurrences.sqlite'
                 AS occs;
 
-ATTACH DATABASE '/users/nmtarr/code/range_map_evaluation/parameters.sqlite'
+ATTACH DATABASE '/users/nmtarr/code/occurrence-record-wrangler/parameters.sqlite'
                 AS params;
 
 /*#############################################################################
@@ -91,14 +86,14 @@ CREATE TABLE orange AS
        ON green.occ_id = ox.occ_id
   WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
                                           FROM params.evaluations
-                                          WHERE evaluation_id= 'eval_gbif1'))
+                                          WHERE evaluation_id= 'eval'))
                           AND 100;
 
 /*  How many occurrences in each huc that had an occurrence? */
-ALTER TABLE sp_range ADD COLUMN eval_gbif1_cnt INTEGER;
+ALTER TABLE sp_range ADD COLUMN eval_cnt INTEGER;
 
 UPDATE sp_range
-SET eval_gbif1_cnt = (SELECT COUNT(occ_id)
+SET eval_cnt = (SELECT COUNT(occ_id)
                       FROM orange
                       WHERE HUC12RNG = sp_range.strHUC12RNG
                       GROUP BY HUC12RNG);
@@ -106,7 +101,7 @@ SET eval_gbif1_cnt = (SELECT COUNT(occ_id)
 
 /*  Find hucs that contained gbif occurrences, but were not in gaprange and
 insert them into sp_range as new records.  Record the occurrence count */
-INSERT INTO sp_range (strHUC12RNG, eval_gbif1_cnt)
+INSERT INTO sp_range (strHUC12RNG, eval_cnt)
             SELECT orange.HUC12RNG, COUNT(occ_id)
             FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
             WHERE sp_range.strHUC12RNG IS NULL
@@ -115,15 +110,15 @@ INSERT INTO sp_range (strHUC12RNG, eval_gbif1_cnt)
 
 /*############################  Does HUC contain an occurrence?
 #############################################################*/
-ALTER TABLE sp_range ADD COLUMN eval_gbif1 INTEGER;
+ALTER TABLE sp_range ADD COLUMN eval INTEGER;
 
 /*  Record in sp_range that gap and gbif agreed on species presence, in light
 of the min_count for the species. */
 UPDATE sp_range
-SET eval_gbif1 = 1
-WHERE eval_gbif1_cnt >= (SELECT min_count
+SET eval = 1
+WHERE eval_cnt >= (SELECT min_count
                         FROM params.evaluations
-                        WHERE evaluation_id = 'eval_gbif1');
+                        WHERE evaluation_id = 'eval');
 
 
 /*  For new records, put zeros in GAP range attribute fields  */
@@ -132,8 +127,8 @@ SET intGAPOrigin = 0,
     intGAPPresence = 0,
     intGAPReproduction = 0,
     intGAPSeason = 0,
-    eval_gbif1 = 0
-WHERE eval_gbif1_cnt >= 0 AND intGAPOrigin IS NULL;
+    eval = 0
+WHERE eval_cnt >= 0 AND intGAPOrigin IS NULL;
 
 
 /*###########################################  Validaton column
@@ -144,7 +139,7 @@ ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
 
 UPDATE sp_range
 SET validated_presence = 1
-WHERE eval_gbif1 = 1;
+WHERE eval = 1;
 
 
 /*#############################################################################
@@ -161,14 +156,14 @@ SELECT ExportSHP('new_range', 'geom_4326', '{3}{4}_CONUS_Range_2001v1_eval',
                  'utf-8');
 
 /* Make a shapefile of evaluation results */
-CREATE TABLE eval_gbif1 AS
-              SELECT strHUC12RNG, eval_gbif1, geom_4326
+CREATE TABLE eval AS
+              SELECT strHUC12RNG, eval, geom_4326
               FROM new_range
-              WHERE eval_gbif1 >= 0;
+              WHERE eval >= 0;
 
-SELECT RecoverGeometryColumn('eval_gbif1', 'geom_4326', 4326, 'POLYGON', 'XY');
+SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-SELECT ExportSHP('eval_gbif1', 'geom_4326', '{3}{4}_eval_gbif1', 'utf-8');
+SELECT ExportSHP('eval', 'geom_4326', '{3}{4}_eval', 'utf-8');
 
 
 /*#############################################################################

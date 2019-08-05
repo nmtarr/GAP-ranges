@@ -1,11 +1,12 @@
 #NOTE! this is overwritten by some notebooks, so update everywhere, if adding lines.
-sp_id = 'bwewax0'
+sp_id = 'bwewax'
 summary_name = 'wormie1'
 gbif_req_id = 'GBIFr16'
 gbif_filter_id = 'GBIFf4'
 ebird_req_id = None
 ebird_filter_id = None
-evaluation = 'eval_gbif1'
+evaluation = 'tws'
+shucLoc = '/users/nmtarr/data/SHUCS'
 workDir = '/Users/nmtarr/Documents/RANGES/'
 codeDir = '/Users/nmtarr/Code/GAP-range-evaluation/'
 inDir = workDir + 'Inputs/'

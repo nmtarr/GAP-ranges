@@ -9,14 +9,7 @@ import pandas as pd
 import os
 
 # Get gap id
-conn2 = sqlite3.connect(config.inDir + 'parameters.sqlite')
-cursor2 = conn2.cursor()
-sql_tax = """SELECT gap_id FROM species_concepts
-             WHERE species_id = '{0}';""".format(config.sp_id)
-gap_id = cursor2.execute(sql_tax).fetchone()[0]
-gap_id = gap_id[0] + gap_id[1:5] + gap_id[5]
-conn2.close()
-del cursor2
+gap_id = config.sp_id
 
 # Delete db if it exists
 eval_db = config.outDir + gap_id + '_range.sqlite' # Name of range evaluation database.
@@ -30,7 +23,7 @@ conn.enable_load_extension(True)
 conn.execute('SELECT load_extension("mod_spatialite")')
 cursor = conn.cursor()
 
-shucLoc = '/users/nmtarr/data/SHUCS'
+shucLoc = config.shucLoc
 
 sql="""
 SELECT InitSpatialMetadata();
