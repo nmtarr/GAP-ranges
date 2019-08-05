@@ -1,6 +1,6 @@
 #NOTE! this is overwritten by some notebooks, so update everywhere, if adding lines.
 sp_id = 'bwewax0'
-summary_name = 'wormie'
+summary_name = 'wormie1'
 gbif_req_id = 'GBIFr16'
 gbif_filter_id = 'GBIFf4'
 ebird_req_id = None
