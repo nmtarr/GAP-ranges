@@ -29,7 +29,7 @@ outDir = config.outDir
 shucLoc = config.shucLoc
 
 # Create or connect to the range_evaluation database and eval parameters db
-conn2 = sqlite3.connect(config.inDir + 'parameters.sqlite')
+conn2 = sqlite3.connect(config.codeDir + "evaluations.sqlite")
 cursor2 = conn2.cursor()
 gap_id = config.sp_id
 
@@ -50,10 +50,10 @@ years = cursor2.execute("SELECT years "
                         "WHERE evaluation_id = '{0}'".format(config.evaluation)).fetchone()[0]
 
 sql="""
-ATTACH DATABASE '/users/nmtarr/documents/ranges/outputs/{0}_occurrences.sqlite'
+ATTACH DATABASE '/users/nmtarr/documents/Occurrences/outputs/bwewax0GBIFr14GBIFf4.sqlite'
                 AS occs;
 
-ATTACH DATABASE '/users/nmtarr/code/occurrence-record-wrangler/parameters.sqlite'
+ATTACH DATABASE '/users/nmtarr/code/GAP-range-evaluation/evaluations.sqlite'
                 AS params;
 
 /*#############################################################################
@@ -174,7 +174,10 @@ DROP TABLE sp_range;
 DROP TABLE green;
 DROP TABLE orange;
 """.format(sp_id, months, years, outDir, gap_id)
-cursor.executescript(sql)
+try:
+    cursor.executescript(sql)
+except Exception as e:
+    print(e)
 
 conn.close()
 conn2.close()
