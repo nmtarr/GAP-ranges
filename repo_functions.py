@@ -1,4 +1,8 @@
+twsSpp = ["aCYTRx", "aWESPx", "bSHCOx", "mVASHh", "rBCCOx", "bTACRx", "aTSSAx", "bBBWAx", "rMEGAx", "rGHLIx", "mMAORn", "mSEWEa", "bCOMOx", "mMAORn", "aERBSx", "aSRBSx", "aVFSAx", "aSGCSx", "mLECHt", "rAZTUx", "rSOWAx", "mHASEx", "bWESAx", "rCHTUx", "mPJMOx", "rBMTUx", "mMEDEx", "rSIDEx", "bWTSWx", "rRNSNx"]
+
 # Define a function for displaying the maps that will be created.
+
+
 def MapShapefilePolygons(map_these, title):
     """
     Displays shapefiles on a simple CONUS basemap.  Maps are plotted in the order

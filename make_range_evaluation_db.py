@@ -26,7 +26,7 @@ cursor = conn.cursor()
 shucLoc = config.shucLoc
 
 sql="""
-SELECT InitSpatialMetadata();
+SELECT InitSpatialMetadata(1);
 
 /* Add Albers_Conic_Equal_Area 102008 to the spatial sys ref tables */
 SELECT InitSpatialMetaData();
