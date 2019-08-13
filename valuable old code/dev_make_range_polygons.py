@@ -6,7 +6,6 @@ Runs so far have produced uninformative results because of scarcity of records.
 TO DO:
 1. change 'max_error_meters' to 'spatial_error_tolerance'
 2  remove min_count?
-3. Pull from config.py when possible
 """
 #############################################################################
 #                               Configuration

@@ -1,5 +1,5 @@
 """
-Uses occurrence data collected with the wildlife sightings wrangler reporting
+Uses occurrence data collected with the occurrence records wrangler repo
 to evaluate the GAP range map for a species.  A table is created for the GAP
 range and columns reporting the results of evaluation and validation are
 populated after evaluating spatial relationships of occurrence records (circles)
@@ -15,23 +15,23 @@ Unresolved issues:
 3. Locations of huc files. -- can sciencebase be used?
 4. Condition data used on the parameters, such as filter_sets in the evaluations
    table.
+
+Arguments:
+gap_id -- 
+summary_name -- 
+gbif_req_id --
+gbif_filter_id --
+outDir -- 
+shucLoc -- 
+codeDir -- 
 """
 import sqlite3
 import config
 import os
 
-# Get evaluation paramaters
-sp_id = config.sp_id
-summary_name = config.summary_name
-gbif_req_id = config.gbif_req_id
-gbif_filter_id = config.gbif_filter_id
-outDir = config.outDir
-shucLoc = config.shucLoc
-
 # Create or connect to the range_evaluation database and eval parameters db
-conn2 = sqlite3.connect(config.codeDir + "evaluations.sqlite")
+conn2 = sqlite3.connect(codeDir + "evaluations.sqlite")
 cursor2 = conn2.cursor()
-gap_id = config.sp_id
 
 # Range evaluation database.
 eval_db = outDir + gap_id + '_range.sqlite'
