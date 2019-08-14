@@ -140,14 +140,14 @@ def download_GAP_range_CONUS2001v1(gap_id, toDir):
     # Return path to range file without extension
     return rng_zip.replace('.zip', '')
 
-def make_evaluation_db(gap_id, outDir, shucLoc, inDir):
+def make_evaluation_db(eval_db, gap_id, inDir, shucLoc):
     """
     Builds an sqlite database in which to store range evaluation information.  
-    shucloc needs to be eventually be replaced wtih ScienceBase download of shucs.
+    shucloc needs to be eventually be replaced with ScienceBase download of shucs.
     
     Arguments:
+    eval_db -- name of database to create for evaluation.
     gap_id -- gap species code. For example, 'bAMROx'
-    outDir -- project's output directory
     shucLoc -- path to GAP's 12 digit hucs shapefile
     inDir -- project's input directory    
     """
@@ -156,21 +156,19 @@ def make_evaluation_db(gap_id, outDir, shucLoc, inDir):
     import os
 
     # Delete db if it exists
-    eval_db = outDir + gap_id + '_range.sqlite' # Name of range evaluation database.
     if os.path.exists(eval_db):
         os.remove(eval_db)
 
     # Create or connect to the database
     conn = sqlite3.connect(eval_db)
+    cursor = conn.cursor()
     os.putenv('SPATIALITE_SECURITY', 'relaxed')
     conn.enable_load_extension(True)
-    conn.execute('SELECT load_extension("mod_spatialite")')
+    cursor.execute('SELECT load_extension("mod_spatialite")')
+    cursor.execute('SELECT InitSpatialMetadata(1);')
 
-    sql="""
-    SELECT InitSpatialMetadata(1);
-
-    /* Add Albers_Conic_Equal_Area 102008 to the spatial sys ref tables */
-    SELECT InitSpatialMetaData();
+    # Add Albers Conic Equal Area 102008 to the spatial sys ref tables
+    cursor.execute("""/* Add Albers_Conic_Equal_Area 102008 to the spatial sys ref tables */
                  INSERT into spatial_ref_sys
                  (srid, auth_name, auth_srid, proj4text, srtext)
                  values (102008, 'ESRI', 102008, '+proj=aea +lat_1=20 +lat_2=60
@@ -187,14 +185,10 @@ def make_evaluation_db(gap_id, outDir, shucLoc, inDir):
                  PARAMETER["Standard_Parallel_1",20],
                  PARAMETER["Standard_Parallel_2",60],
                  PARAMETER["latitude_of_center",40],
-                 UNIT["Meter",1],AUTHORITY["EPSG","102008"]]');
-
-
-    /* Add the hucs shapefile to the db. */
-    SELECT ImportSHP('{0}', 'shucs', 'utf-8', 102008,
-                     'geom_102008', 'HUC12RNG', 'POLYGON');
-    """.format(shucLoc)
-    conn.executescript(sql)
+                 UNIT["Meter",1],AUTHORITY["EPSG","102008"]]');""")
+    
+    # Add the hucs shapefile to the db.
+    cursor.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 102008, 'geom_102008', 'HUC12RNG', 'POLYGON');""", (shucLoc,))
 
     # Load the GAP range csv, filter out some columns, rename others
     csvfile = inDir + gap_id + "_CONUS_RANGE_2001v1.csv"
@@ -218,6 +212,9 @@ def make_evaluation_db(gap_id, outDir, shucLoc, inDir):
     DROP TABLE garb;
     """
     cursor.executescript(sql2)
+    conn.commit()
+    conn.close()
+    del cursor
 
 def get_GBIF_species_key(scientific_name):
     """
@@ -238,7 +235,8 @@ def get_GBIF_species_key(scientific_name):
     key = species.name_backbone(name = 'Lithobates capito', rank='species')['usageKey']
     return key
 
-def evaluate_GAP_range(gap_id, eval_occs_db, gbif_req_id, gbif_filter_id, outDir, shucLoc, codeDir):
+def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id, 
+                       gbif_filter_id, outDir, shucLoc, codeDir):
     """
     Uses occurrence data collected with the occurrence records wrangler repo
     to evaluate the GAP range map for a species.  A table is created for the GAP
@@ -258,39 +256,28 @@ def evaluate_GAP_range(gap_id, eval_occs_db, gbif_req_id, gbif_filter_id, outDir
        table.
 
     Arguments:
+    eval_id -- name/code of the evaluation
     gap_id -- gap species code.
-    eval_occs_db -- 
-    gbif_req_id --
-    gbif_filter_id --
-    outDir -- 
-    shucLoc -- 
-    codeDir -- 
+    eval_db -- path to the evaluation database.  It should have been created with 
+                make_evaluation_db() so the schema is correct.
+    gbif_req_id -- id of the request filter set that was used to get records from gbif.
+    gbif_filter_id -- id of the post request filter set that was used to get records.
+    outDir -- directory of 
+    shucLoc -- path to GAP 12 digit hucs data.
+    codeDir -- directory of code repo
     """
     
     import sqlite3
     import os
 
-    # Create or connect to the range_evaluation database and eval parameters db
-    conn2 = sqlite3.connect(codeDir + "evaluations.sqlite")
-
     # Range evaluation database.
-    eval_db = outDir + gap_id + '_range.sqlite'
     conn = sqlite3.connect(eval_db)
     os.putenv('SPATIALITE_SECURITY', 'relaxed')
     conn.enable_load_extension(True)
     conn.execute('SELECT load_extension("mod_spatialite")')
 
-    # Get evaluation months and years
-    months = conn2.execute("SELECT months "
-                            "FROM evaluations "
-                            "WHERE evaluation_id = '{0}'".format(evaluation)).fetchone()[0]
-    
-    years = conn2.execute("SELECT years "
-                            "FROM evaluations "
-                            "WHERE evaluation_id = '{0}'".format(evaluation)).fetchone()[0]
-
     conn.executescript("""ATTACH DATABASE '{1}' AS occs; 
-                          ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir, eval_occs_db))
+                          ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir, eval_db))
         
     sql2="""
     /*#############################################################################
@@ -305,9 +292,7 @@ def evaluate_GAP_range(gap_id, eval_occs_db, gbif_req_id, gbif_filter_id, outDir
                   CastToMultiPolygon(Intersection(shucs.geom_102008,
                                                   ox.circle_albers)) AS geom_102008
                   FROM shucs, occs.occurrences AS ox
-                  WHERE Intersects(shucs.geom_102008, ox.circle_albers)
-                    AND Cast(strftime('%m', ox.occurrenceDate) AS INTEGER) IN ({0})
-                    AND Cast(strftime('%Y', ox.occurrenceDate) AS INTEGER) IN ({1});
+                  WHERE Intersects(shucs.geom_102008, ox.circle_albers);
 
     SELECT RecoverGeometryColumn('green', 'geom_102008', 102008, 'MULTIPOLYGON',
                                  'XY');
