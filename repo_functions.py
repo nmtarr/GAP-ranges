@@ -354,7 +354,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
     WHERE eval_cnt >= 0 AND intGAPOrigin IS NULL;
 
 
-    /*###########################################  Validaton column
+    /*###########################################  Validation column
     #############################################################*/
     /*  Populate a validation column.  If an evaluation supports the GAP ranges
     then it is validated */
