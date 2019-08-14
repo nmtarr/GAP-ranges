@@ -235,8 +235,7 @@ def get_GBIF_species_key(scientific_name):
     key = species.name_backbone(name = 'Lithobates capito', rank='species')['usageKey']
     return key
 
-def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id, 
-                       gbif_filter_id, outDir, shucLoc, codeDir):
+def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, method='Proportion in polygon'):
     """
     Uses occurrence data collected with the occurrence records wrangler repo
     to evaluate the GAP range map for a species.  A table is created for the GAP
@@ -260,11 +259,10 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
     gap_id -- gap species code.
     eval_db -- path to the evaluation database.  It should have been created with 
                 make_evaluation_db() so the schema is correct.
-    gbif_req_id -- id of the request filter set that was used to get records from gbif.
-    gbif_filter_id -- id of the post request filter set that was used to get records.
+    occs_db -- path to the occurrence database you are using for the evaluation.
     outDir -- directory of 
-    shucLoc -- path to GAP 12 digit hucs data.
     codeDir -- directory of code repo
+    method -- evaluation method
     """
     
     import sqlite3
@@ -272,12 +270,13 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
 
     # Range evaluation database.
     conn = sqlite3.connect(eval_db)
+    cursor = conn.cursor()
     os.putenv('SPATIALITE_SECURITY', 'relaxed')
     conn.enable_load_extension(True)
-    conn.execute('SELECT load_extension("mod_spatialite")')
+    cursor.execute('SELECT load_extension("mod_spatialite")')
 
-    conn.executescript("""ATTACH DATABASE '{1}' AS occs; 
-                          ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir, eval_db))
+    cursor.executescript("""ATTACH DATABASE '{1}' AS occs; 
+                          ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir, occs_db))
         
     sql2="""
     /*#############################################################################
@@ -308,7 +307,8 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
            ON green.occ_id = ox.occ_id
       WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
                                               FROM params.evaluations
-                                              WHERE evaluation_id= 'eval'))
+                                              WHERE evaluation_id = '{0}'
+                                              AND gap_id = '{1}'))
                               AND 100;
 
     /*  How many occurrences in each huc that had an occurrence? */
@@ -340,7 +340,8 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
     SET eval = 1
     WHERE eval_cnt >= (SELECT min_count
                             FROM params.evaluations
-                            WHERE evaluation_id = 'eval');
+                            WHERE evaluation_id = '{0}')
+                            AND gap_id = '{1}';
 
 
     /*  For new records, put zeros in GAP range attribute fields  */
@@ -374,7 +375,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
 
     SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-    SELECT ExportSHP('new_range', 'geom_4326', '{2}{3}_CONUS_Range_2001v1_eval',
+    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2001v1_eval',
                      'utf-8');
 
     /* Make a shapefile of evaluation results */
@@ -385,7 +386,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
 
     SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-    SELECT ExportSHP('eval', 'geom_4326', '{2}{3}_eval', 'utf-8');
+    SELECT ExportSHP('eval', 'geom_4326', '{2}{1}_eval', 'utf-8');
 
 
     /*#############################################################################
@@ -395,7 +396,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, gbif_req_id,
     DROP TABLE sp_range;
     DROP TABLE green;
     DROP TABLE orange;
-    """.format(months, years, outDir, gap_id)
+    """.format(eval_id, gap_id, outDir)
     
     try:
         cursor.executescript(sql2)
