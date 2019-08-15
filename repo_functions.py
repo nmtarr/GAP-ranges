@@ -235,7 +235,7 @@ def get_GBIF_species_key(scientific_name):
     key = species.name_backbone(name = 'Lithobates capito', rank='species')['usageKey']
     return key
 
-def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, method='Proportion in polygon'):
+def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir, method='Proportion in polygon'):
     """
     Uses occurrence data collected with the occurrence records wrangler repo
     to evaluate the GAP range map for a species.  A table is created for the GAP
@@ -259,7 +259,6 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
     gap_id -- gap species code.
     eval_db -- path to the evaluation database.  It should have been created with 
                 make_evaluation_db() so the schema is correct.
-    occs_db -- path to the occurrence database you are using for the evaluation.
     outDir -- directory of 
     codeDir -- directory of code repo
     method -- evaluation method
@@ -275,8 +274,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
     conn.enable_load_extension(True)
     cursor.execute('SELECT load_extension("mod_spatialite")')
 
-    cursor.executescript("""ATTACH DATABASE '{1}' AS occs; 
-                          ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir, occs_db))
+    cursor.executescript("""ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir))
         
     sql2="""
     /*#############################################################################
@@ -290,7 +288,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
                   SELECT shucs.HUC12RNG, ox.occ_id,
                   CastToMultiPolygon(Intersection(shucs.geom_102008,
                                                   ox.circle_albers)) AS geom_102008
-                  FROM shucs, occs.occurrences AS ox
+                  FROM shucs, evaluation_occurrences AS ox
                   WHERE Intersects(shucs.geom_102008, ox.circle_albers);
 
     SELECT RecoverGeometryColumn('green', 'geom_102008', 102008, 'MULTIPOLYGON',
@@ -303,12 +301,12 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
              100 * (Area(green.geom_102008) / Area(ox.circle_albers))
                 AS proportion_circle
       FROM green
-           LEFT JOIN occs.occurrences AS ox
+           LEFT JOIN evaluation_occurrences AS ox
            ON green.occ_id = ox.occ_id
       WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
                                               FROM params.evaluations
                                               WHERE evaluation_id = '{0}'
-                                              AND gap_id = '{1}'))
+                                              AND species_id = '{1}'))
                               AND 100;
 
     /*  How many occurrences in each huc that had an occurrence? */
@@ -340,8 +338,8 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
     SET eval = 1
     WHERE eval_cnt >= (SELECT min_count
                             FROM params.evaluations
-                            WHERE evaluation_id = '{0}')
-                            AND gap_id = '{1}';
+                            WHERE evaluation_id = '{0}'
+                            AND species_id = '{1}');
 
 
     /*  For new records, put zeros in GAP range attribute fields  */
