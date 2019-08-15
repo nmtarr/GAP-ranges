@@ -402,6 +402,6 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, occs_db, outDir, codeDir, metho
         cursor.executescript(sql2)
     except Exception as e:
         print(e)
-
+    
+    conn.commit()
     conn.close()
-    conn2.close()
