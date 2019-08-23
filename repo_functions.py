@@ -210,7 +210,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
         
     # Load the GAP range csv, filter out some columns, rename others
     csvfile = inDir + gap_id + "_CONUS_RANGE_2001v1.csv"
-    sp_range = pd.read_csv(csvfile)
+    sp_range = pd.read_csv(csvfile, dtype={'strHUC12RNG':str})
     sp_range.to_sql('sp_range', conn, if_exists='replace', index=False)
     conn.commit() # Commit and close here, reopen connection or else code throws errors.
     conn.close()
