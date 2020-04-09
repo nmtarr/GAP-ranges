@@ -1,13 +1,20 @@
-twsSpp = ["aCYTRx", "aWESPx", "bSHCOx", "mVASHh", "rBCCOx", "bTACRx", "aTSSAx", "bBBWAx", "rMEGAx", "rGHLIx", "mMAORn", "mSEWEa", "bCOMOx", "mMAORn", "aERBSx", "aSRBSx", "aVFSAx", "aSGCSx", "mLECHt", "rAZTUx", "rSOWAx", "mHASEx", "bWESAx", "rCHTUx", "mPJMOx", "rBMTUx", "mMEDEx", "rSIDEx", "bWTSWx", "rRNSNx"]
+def getRecordDetails(key):
+    """
+    Returns a dictionary holding all GBIF details about the record.
 
-# Function for connecting to sqlite database and loading spatialite capabilites
+    Example: details = getRecordDetails(key = 1265907957)
+    """
+    from pygbif import occurrences
+    details = occurrences.get(key = key)
+    return details
+
 def spatialite(db):
     """
     Creates a connection and cursor for sqlite db and enables
     spatialite extension and shapefile functions.
-    
+
     (db) --> connection, cursor
-    
+
     Arguments:
     db -- path to the db you want to create or connect to.
     """
@@ -18,11 +25,9 @@ def spatialite(db):
     os.putenv('SPATIALITE_SECURITY', 'relaxed')
     connection.enable_load_extension(True)
     cursor.execute('SELECT load_extension("mod_spatialite");')
-    
-    return cursor, connection
-    
 
-# Define a function for displaying the maps that will be created.
+    return cursor, connection
+
 def MapShapefilePolygons(map_these, title):
     """
     Displays shapefiles on a simple CONUS basemap.  Maps are plotted in the order
@@ -128,7 +133,6 @@ def MapShapefilePolygons(map_these, title):
     plt.title(title, fontsize=20, pad=-40, backgroundcolor='w')
     return
 
-
 def download_GAP_range_CONUS2001v1(gap_id, toDir):
     """
     Downloads GAP Range CONUS 2001 v1 file and returns path to the unzipped
@@ -162,9 +166,9 @@ def download_GAP_range_CONUS2001v1(gap_id, toDir):
 
 def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     """
-    Builds an sqlite database in which to store range evaluation information.  
+    Builds an sqlite database in which to store range evaluation information.
     shucloc needs to be eventually be replaced with ScienceBase download of shucs.
-    
+
     Arguments:
     eval_db -- name of database to create for evaluation.
     gap_id -- gap species code. For example, 'bAMROx'
@@ -182,7 +186,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
 
     # Create the database
     cursorQ, conn = spatialite(eval_db)
-    
+
     cursorQ.execute('SELECT InitSpatialMetadata(1);')
 
     # Add Albers Conic Equal Area 102008 to the spatial sys ref tables
@@ -204,19 +208,19 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
                  PARAMETER["Standard_Parallel_2",60],
                  PARAMETER["latitude_of_center",40],
                  UNIT["Meter",1],AUTHORITY["EPSG","102008"]]');""")
-    
+
     # Add the hucs shapefile to the db.
     cursorQ.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 102008, 'geom_102008', 'HUC12RNG', 'POLYGON');""", (shucLoc,))
-        
+
     # Load the GAP range csv, filter out some columns, rename others
     csvfile = inDir + gap_id + "_CONUS_RANGE_2001v1.csv"
     sp_range = pd.read_csv(csvfile, dtype={'strHUC12RNG':str})
     sp_range.to_sql('sp_range', conn, if_exists='replace', index=False)
     conn.commit() # Commit and close here, reopen connection or else code throws errors.
     conn.close()
-    
+
     cursorQ, conn = spatialite(eval_db)
-    
+
     sql1 = """
     ALTER TABLE sp_range RENAME TO garb;
 
@@ -232,23 +236,23 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
                           FROM garb;
     DROP TABLE garb;
     """
-    cursorQ.executescript(sql1) 
-    
+    cursorQ.executescript(sql1)
+
     sql2 = """
-    CREATE TABLE presence AS SELECT sp_range.strHUC12RNG, shucs.geom_102008 
+    CREATE TABLE presence AS SELECT sp_range.strHUC12RNG, shucs.geom_102008
                              FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG
                              WHERE sp_range.intGAPPresence = 1;
-                             
+
     /* Transform to 4326 for displaying purposes*/
     ALTER TABLE presence ADD COLUMN geom_4326 INTEGER;
-             
+
     UPDATE presence SET geom_4326 = Transform(geom_102008, 4326);
-    
+
     SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON', 'XY');
 
     SELECT ExportSHP('presence', 'geom_4326', '{0}{1}_presence_4326', 'utf-8');
     """.format(outDir, gap_id)
-    
+
     cursorQ.executescript(sql2)
     conn.commit()
     conn.close()
@@ -273,7 +277,6 @@ def get_GBIF_species_key(scientific_name):
     key = species.name_backbone(name = 'Lithobates capito', rank='species')['usageKey']
     return key
 
-
 def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     """
     Uses occurrence data collected with the occurrence records wrangler repo
@@ -296,24 +299,24 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     Arguments:
     eval_id -- name/code of the evaluation
     gap_id -- gap species code.
-    eval_db -- path to the evaluation database.  It should have been created with 
+    eval_db -- path to the evaluation database.  It should have been created with
                 make_evaluation_db() so the schema is correct.
-    outDir -- directory of 
+    outDir -- directory of
     codeDir -- directory of code repo
     """
     import sqlite3
     import os
-    
+
     cursor, conn = spatialite(codeDir + "/evaluations.sqlite")
-    method = cursor.execute("SELECT method FROM evaluations WHERE evaluation_id = ?;", (eval_id,)).fetchone()[0] 
+    method = cursor.execute("SELECT method FROM evaluations WHERE evaluation_id = ?;", (eval_id,)).fetchone()[0]
     conn.close()
     del cursor
-    
+
     # Range evaluation database.
     cursor, conn = spatialite(eval_db)
 
     cursor.executescript("""ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir))
-        
+
     sql2="""
     /*#############################################################################
                                  Assess Agreement
@@ -408,13 +411,13 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     CREATE TABLE new_range AS
                   SELECT sp_range.*, shucs.geom_102008
                   FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
-    
+
     ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
-    
+
     SELECT RecoverGeometryColumn('new_range', 'geom_102008', 102008, 'POLYGON', 'XY');
-    
+
     UPDATE new_range SET geom_4326 = Transform(geom_102008, 4326);
-    
+
     SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
 
     SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2001v1_eval',
@@ -438,11 +441,11 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     DROP TABLE green;
     DROP TABLE orange;
     """.format(eval_id, gap_id, outDir)
-    
+
     try:
         cursor.executescript(sql2)
     except Exception as e:
         print(e)
-    
+
     conn.commit()
     conn.close()
