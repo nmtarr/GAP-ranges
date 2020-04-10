@@ -47,6 +47,15 @@ def spatialite(db):
     """
     import os
     import sqlite3
+    import platform
+    # Environment variables need to be handled
+    if platform.system() == 'Windows':
+        os.environ['PATH'] = os.environ['PATH'] + ';' + 'C:/Spatialite'
+        os.environ['SPATIALITE_SECURITY'] = 'relaxed'# DOES THIS NEED TO BE RUN BEFORE EVERY CONNECTION????? ?NOT WORKING  ???????????
+
+    if platform.system() == 'Darwin':  # DOES THIS NEED TO BE RUN BEFORE EVERY CONNECTION?????????????????
+        #os.putenv('SPATIALITE_SECURITY', 'relaxed')
+        os.environ['SPATIALITE_SECURITY'] = 'relaxed'
     connection = sqlite3.connect(db)
     cursor = connection.cursor()
     os.putenv('SPATIALITE_SECURITY', 'relaxed')
@@ -215,28 +224,8 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
 
     cursorQ.execute('SELECT InitSpatialMetadata(1);')
 
-    # Add Albers Conic Equal Area 102008 to the spatial sys ref tables
-    cursorQ.execute("""/* Add Albers_Conic_Equal_Area 102008 to the spatial sys ref tables */
-                 INSERT into spatial_ref_sys
-                 (srid, auth_name, auth_srid, proj4text, srtext)
-                 values (102008, 'ESRI', 102008, '+proj=aea +lat_1=20 +lat_2=60
-                 +lat_0=40 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m
-                 +no_defs ', 'PROJCS["North_America_Albers_Equal_Area_Conic",
-                 GEOGCS["GCS_North_American_1983",
-                 DATUM["North_American_Datum_1983",
-                 SPHEROID["GRS_1980",6378137,298.257222101]],
-                 PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]],
-                 PROJECTION["Albers_Conic_Equal_Area"],
-                 PARAMETER["False_Easting",0],
-                 PARAMETER["False_Northing",0],
-                 PARAMETER["longitude_of_center",-96],
-                 PARAMETER["Standard_Parallel_1",20],
-                 PARAMETER["Standard_Parallel_2",60],
-                 PARAMETER["latitude_of_center",40],
-                 UNIT["Meter",1],AUTHORITY["EPSG","102008"]]');""")
-
     # Add the hucs shapefile to the db.
-    cursorQ.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 102008, 'geom_102008', 'HUC12RNG', 'POLYGON');""", (shucLoc,))
+    cursorQ.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 5070, 'geom_5070', 'HUC12RNG', 'POLYGON');""", (shucLoc,))
 
     # Load the GAP range csv, filter out some columns, rename others
     csvfile = inDir + gap_id + "_CONUS_RANGE_2001v1.csv"
@@ -265,14 +254,14 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     cursorQ.executescript(sql1)
 
     sql2 = """
-    CREATE TABLE presence AS SELECT sp_range.strHUC12RNG, shucs.geom_102008
+    CREATE TABLE presence AS SELECT sp_range.strHUC12RNG, shucs.geom_5070
                              FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG
                              WHERE sp_range.intGAPPresence = 1;
 
     /* Transform to 4326 for displaying purposes*/
     ALTER TABLE presence ADD COLUMN geom_4326 INTEGER;
 
-    UPDATE presence SET geom_4326 = Transform(geom_102008, 4326);
+    UPDATE presence SET geom_4326 = Transform(geom_5070, 4326);
 
     SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON', 'XY');
 
@@ -334,19 +323,19 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     /*  Intersect occurrence circles with hucs  */
     CREATE TABLE green AS
                   SELECT shucs.HUC12RNG, ox.occ_id,
-                  CastToMultiPolygon(Intersection(shucs.geom_102008,
-                                                  ox.circle_albers)) AS geom_102008
+                  CastToMultiPolygon(Intersection(shucs.geom_5070,
+                                                  ox.circle_albers)) AS geom_5070
                   FROM shucs, evaluation_occurrences AS ox
-                  WHERE Intersects(shucs.geom_102008, ox.circle_albers);
+                  WHERE Intersects(shucs.geom_5070, ox.circle_albers);
 
-    SELECT RecoverGeometryColumn('green', 'geom_102008', 102008, 'MULTIPOLYGON',
+    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
 
     /* In light of the error tolerance for the species, which occurrences can
        be attributed to a huc?  */
     CREATE TABLE orange AS
       SELECT green.HUC12RNG, green.occ_id,
-             100 * (Area(green.geom_102008) / Area(ox.circle_albers))
+             100 * (Area(green.geom_5070) / Area(ox.circle_albers))
                 AS proportion_circle
       FROM green
            LEFT JOIN evaluation_occurrences AS ox
@@ -416,14 +405,14 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
      ############################################################################*/
     /*  Create a version of sp_range with geometry  */
     CREATE TABLE new_range AS
-                  SELECT sp_range.*, shucs.geom_102008
+                  SELECT sp_range.*, shucs.geom_5070
                   FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
 
     ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
 
-    SELECT RecoverGeometryColumn('new_range', 'geom_102008', 102008, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
 
-    UPDATE new_range SET geom_4326 = Transform(geom_102008, 4326);
+    UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
 
     SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
 
