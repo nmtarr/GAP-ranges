@@ -273,9 +273,9 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     conn.close()
     del cursorQ
 
-def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
+def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
     """
-    Uses occurrence data collected with the occurrence records wrangler repo
+    Uses occurrence data collected with the wildlife-wrangler repo
     to evaluate the GAP range map for a species.  A table is created for the GAP
     range and columns reporting the results of evaluation and validation are
     populated after evaluating spatial relationships of occurrence records (circles)
@@ -297,13 +297,15 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     gap_id -- gap species code.
     eval_db -- path to the evaluation database.  It should have been created with
                 make_evaluation_db() so the schema is correct.
+    parameters_db -- database with information on range update and evaluation
+                criteria.
     outDir -- directory of
     codeDir -- directory of code repo
     """
     import sqlite3
     import os
 
-    cursor, conn = spatialite(codeDir + "/evaluations.sqlite")
+    cursor, conn = spatialite(parameters_db)
     method = cursor.execute("SELECT method FROM evaluations WHERE evaluation_id = ?;", (eval_id,)).fetchone()[0]
     conn.close()
     del cursor
@@ -324,9 +326,9 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     CREATE TABLE green AS
                   SELECT shucs.HUC12RNG, ox.occ_id,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
-                                                  ox.circle_albers)) AS geom_5070
+                                                  ox.polygon_5070)) AS geom_5070
                   FROM shucs, evaluation_occurrences AS ox
-                  WHERE Intersects(shucs.geom_5070, ox.circle_albers);
+                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
     SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
@@ -335,7 +337,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
        be attributed to a huc?  */
     CREATE TABLE orange AS
       SELECT green.HUC12RNG, green.occ_id,
-             100 * (Area(green.geom_5070) / Area(ox.circle_albers))
+             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
                 AS proportion_circle
       FROM green
            LEFT JOIN evaluation_occurrences AS ox
@@ -347,10 +349,10 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
                               AND 100;
 
     /*  How many occurrences in each huc that had an occurrence? */
-    ALTER TABLE sp_range ADD COLUMN eval_cnt INTEGER;
+    ALTER TABLE sp_range ADD COLUMN weight_sum INTEGER;
 
     UPDATE sp_range
-    SET eval_cnt = (SELECT COUNT(occ_id)
+    SET weight_sum = (SELECT SUM(weight)
                           FROM orange
                           WHERE HUC12RNG = sp_range.strHUC12RNG
                           GROUP BY HUC12RNG);
@@ -358,25 +360,22 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
 
     /*  Find hucs that contained gbif occurrences, but were not in gaprange and
     insert them into sp_range as new records.  Record the occurrence count */
-    INSERT INTO sp_range (strHUC12RNG, eval_cnt)
-                SELECT orange.HUC12RNG, COUNT(occ_id)
+    INSERT INTO sp_range (strHUC12RNG, weight_sum)
+                SELECT orange.HUC12RNG, SUM(weight)
                 FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
                 WHERE sp_range.strHUC12RNG IS NULL
                 GROUP BY orange.HUC12RNG;
 
 
-    /*############################  Does HUC contain an occurrence?
+    /*############################  Does HUC contain enough weight?
     #############################################################*/
     ALTER TABLE sp_range ADD COLUMN eval INTEGER;
 
     /*  Record in sp_range that gap and gbif agreed on species presence, in light
-    of the min_count for the species. */
+    of the minimum weight of 10 */
     UPDATE sp_range
     SET eval = 1
-    WHERE eval_cnt >= (SELECT min_count
-                            FROM params.evaluations
-                            WHERE evaluation_id = '{0}'
-                            AND species_id = '{1}');
+    WHERE weight_sum >= 10;
 
 
     /*  For new records, put zeros in GAP range attribute fields  */
@@ -386,7 +385,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
         intGAPReproduction = 0,
         intGAPSeason = 0,
         eval = 0
-    WHERE eval_cnt >= 0 AND intGAPOrigin IS NULL;
+    WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
 
 
     /*###########################################  Validation column
@@ -416,7 +415,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
 
     SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2001v1_eval',
+    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2020v1',
                      'utf-8');
 
     /* Make a shapefile of evaluation results */
@@ -437,6 +436,177 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, outDir, codeDir):
     DROP TABLE green;
     DROP TABLE orange;
     """.format(eval_id, gap_id, outDir)
+
+    try:
+        cursor.executescript(sql2)
+    except Exception as e:
+        print(e)
+
+    conn.commit()
+    conn.close()
+
+def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
+                    outDir, codeDir):
+    """
+    Uses occurrence data collected with the wildlife-wrangler repo
+    to build an updated GAP range map for a species.  The previous GAP range
+    is used along with recent and historic occurrence records acquired with
+    the wildlife-wrangler.
+
+    The results of this code are a new column in the GAP range table (in the db
+    created for the task) and a range shapefile.
+
+    Parameters:
+    eval_id -- name/code for the update (e.g., 2020v1)
+    gap_id -- gap species code.
+    eval_db -- path to the evaluation database.  It should have been created with
+                make_evaluation_db() so the schema is correct.
+    cutoff_year -- year before which records are considered 'historic'.  Occurrence
+                records from or more recent than the cutoff year will be
+                considered 'recent'.
+    parameters_db -- database with information on range update and evaluation
+                criteria.
+    outDir -- directory of
+    codeDir -- directory of code repo
+    """
+    import sqlite3
+    import os
+
+    cursor, conn = spatialite(parameters_db)
+    method = cursor.execute("""SELECT method
+                               FROM evaluations
+                               WHERE evaluation_id = ?;
+                            """, (eval_id,)).fetchone()[0]
+    conn.close()
+    del cursor
+
+    # Range evaluation database.
+    cursor, conn = spatialite(eval_db)
+
+    cursor.executescript("""ATTACH DATABASE '{0}/evaluations.sqlite' AS params;
+                         """.format(codeDir))
+
+    sql2="""
+    /*#############################################################################
+                                 Assess Agreement
+     ############################################################################*/
+
+    /*#########################  Which HUCs contain an occurrence?
+     #############################################################*/
+    /*  Intersect occurrence circles with hucs  */
+    CREATE TABLE green AS
+                  SELECT shucs.HUC12RNG, ox.occ_id,
+                  CastToMultiPolygon(Intersection(shucs.geom_5070,
+                                                  ox.polygon_5070)) AS geom_5070
+                  FROM shucs, evaluation_occurrences AS ox
+                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
+
+    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
+                                 'XY');
+
+    /* In light of the error tolerance for the species, which occurrences can
+       be attributed to a huc?  */
+    CREATE TABLE orange AS
+      SELECT green.HUC12RNG, green.occ_id,
+             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
+                AS proportion_circle
+      FROM green
+           LEFT JOIN evaluation_occurrences AS ox
+           ON green.occ_id = ox.occ_id
+      WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
+                                              FROM params.evaluations
+                                              WHERE evaluation_id = '{0}'
+                                              AND species_id = '{1}'))
+                              AND 100;
+
+    /*  How many occurrences in each huc that had an occurrence? */
+    ALTER TABLE sp_range ADD COLUMN weight_sum INTEGER;
+
+    UPDATE sp_range
+    SET weight_sum = (SELECT SUM(weight)
+                          FROM orange
+                          WHERE HUC12RNG = sp_range.strHUC12RNG
+                          GROUP BY HUC12RNG);
+
+
+    /*  Find hucs that contained gbif occurrences, but were not in gaprange and
+    insert them into sp_range as new records.  Record the occurrence count */
+    INSERT INTO sp_range (strHUC12RNG, weight_sum)
+                SELECT orange.HUC12RNG, SUM(weight)
+                FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
+                WHERE sp_range.strHUC12RNG IS NULL
+                GROUP BY orange.HUC12RNG;
+
+
+    /*############################  Does HUC contain enough weight?
+    #############################################################*/
+    ALTER TABLE sp_range ADD COLUMN eval INTEGER;
+
+    /*  Record in sp_range that gap and gbif agreed on species presence, in light
+    of the minimum weight of 10 */
+    UPDATE sp_range
+    SET eval = 1
+    WHERE weight_sum >= 10;
+
+
+    /*  For new records, put zeros in GAP range attribute fields  */
+    UPDATE sp_range
+    SET intGAPOrigin = 0,
+        intGAPPresence = 0,
+        intGAPReproduction = 0,
+        intGAPSeason = 0,
+        eval = 0
+    WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
+
+
+    /*###########################################  Validation column
+    #############################################################*/
+    /*  Populate a validation column.  If an evaluation supports the GAP ranges
+    then it is validated */
+    ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
+
+    UPDATE sp_range
+    SET validated_presence = 1
+    WHERE eval = 1;
+
+
+    /*#############################################################################
+                                   Export Maps
+     ############################################################################*/
+    /*  Create a version of sp_range with geometry  */
+    CREATE TABLE new_range AS
+                  SELECT sp_range.*, shucs.geom_5070
+                  FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
+
+    ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
+
+    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
+
+    UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
+
+    SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
+
+    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2020v1',
+                     'utf-8');
+
+    /* Make a shapefile of evaluation results */
+    CREATE TABLE eval AS
+                  SELECT strHUC12RNG, eval, geom_4326
+                  FROM new_range
+                  WHERE eval >= 0;
+
+    SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'POLYGON', 'XY');
+
+    SELECT ExportSHP('eval', 'geom_4326', '{2}{1}_eval', 'utf-8');
+
+
+    /*#############################################################################
+                                 Clean Up
+    #############################################################################*/
+    /*  */
+    DROP TABLE green;
+    DROP TABLE orange;
+    """.format(eval_id, gap_id, outDir, cutoff_year)
 
     try:
         cursor.executescript(sql2)
