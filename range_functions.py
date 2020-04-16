@@ -1,3 +1,22 @@
+RangeCodesDict2001 = {"Presence": {1: "Known/extant", 2: "Possibly present", 3: "Potential for presence",
+                               4: "Extirpated/historical presence",
+                               5: "Extirpated purposely (applies to introduced species only)",
+                                6: "Occurs on indicated island chain", 7: "Unknown"},
+                "Origin": {1: "Native", 2: "Introduced", 3: "Either introducted or native",
+                           4: "Reintroduced", 5: "Either introduced or reintroduced",
+                           6: "Vagrant", 7: "Unknown"},
+                "Reproduction": {1: "Breeding", 2: "Nonbreeding",
+                                 3: "Both breeding and nonbreeding", 7: "Unknown"},
+                 "Season": {1: "Year-round", 2: "Migratory", 3: "Winter", 4: "Summer",
+                            5: "Passage migrant or wanderer", 6: "Seasonal permanence uncertain",
+                            7: "Unknown", 8: "Vagrant"}}
+
+RangeCodesDict2020 = {"Presence": {1: "Documented present", 2: "Predicted present",
+                                   3: "Documented historically present",
+                                   4: "Extirpated/historical presence",
+                                   5: "Extirpated purposely (applies to introduced species only)",
+                                   6: "Occurs on indicated island chain", 7: "Unknown"}}
+
 def concat_dbs(recent_dbs):
     """
     Combines two output databases produced with the wildlife-wranger repo.
@@ -204,6 +223,11 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     Builds an sqlite database in which to store range evaluation information.
     shucloc needs to be eventually be replaced with ScienceBase download of shucs.
 
+    Tables created:
+    range_2001v1 -- the range data downloaded from ScienceBase.
+    shucs -- 12 digit gap hucs coverage.
+    presence_2020v1 -- where data on predicted and documented presence is stored.
+
     Arguments:
     eval_db -- name of database to create for evaluation.
     gap_id -- gap species code. For example, 'bAMROx'
@@ -224,22 +248,24 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
 
     cursorQ.execute('SELECT InitSpatialMetadata(1);')
 
-    # Add the hucs shapefile to the db.
-    cursorQ.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 5070, 'geom_5070', 'HUC12RNG', 'POLYGON');""", (shucLoc,))
+    ####################### ADD (s)HUCS
+    cursorQ.execute("""SELECT ImportSHP(?, 'shucs', 'utf-8', 5070, 'geom_5070',
+                                        'HUC12RNG', 'POLYGON');""", (shucLoc,))
 
-    # Load the GAP range csv, filter out some columns, rename others
+    ###################### ADD 2001v1 RANGE
     csvfile = inDir + gap_id + "_CONUS_RANGE_2001v1.csv"
     sp_range = pd.read_csv(csvfile, dtype={'strHUC12RNG':str})
-    sp_range.to_sql('sp_range', conn, if_exists='replace', index=False)
+    sp_range.to_sql('range_2001v1', conn, if_exists='replace', index=False)
     conn.commit() # Commit and close here, reopen connection or else code throws errors.
     conn.close()
 
     cursorQ, conn = spatialite(eval_db)
 
+    # Rename columns and drop some too.
     sql1 = """
-    ALTER TABLE sp_range RENAME TO garb;
+    ALTER TABLE range_2001v1 RENAME TO garb;
 
-    CREATE TABLE sp_range AS SELECT strHUC12RNG,
+    CREATE TABLE range_2001v1 AS SELECT strHUC12RNG,
                                  intGapOrigin AS intGAPOrigin,
                                  intGapPres AS intGAPPresence,
                                  intGapRepro AS intGAPReproduction,
@@ -253,10 +279,31 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     """
     cursorQ.executescript(sql1)
 
+    # Table to use for evaluations, renamed from 'presence' 14April2020.
     sql2 = """
-    CREATE TABLE presence AS SELECT sp_range.strHUC12RNG, shucs.geom_5070
-                             FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG
-                             WHERE sp_range.intGAPPresence = 1;
+    CREATE TABLE present_2001v1 AS SELECT range_2001v1.strHUC12RNG, shucs.geom_5070
+                             FROM range_2001v1 LEFT JOIN shucs
+                                               ON range_2001v1.strHUC12RNG = shucs.HUC12RNG
+                             WHERE range_2001v1.intGAPPresence = 1;
+
+    /* Transform to 4326 for displaying purposes*/
+    ALTER TABLE present_2001v1 ADD COLUMN geom_4326 INTEGER;
+
+    UPDATE present_2001v1 SET geom_4326 = Transform(geom_5070, 4326);
+
+    SELECT RecoverGeometryColumn('present_2001v1', 'geom_4326', 4326, 'POLYGON', 'XY');
+
+    SELECT ExportSHP('present_2001v1', 'geom_4326', '{0}{1}_present2001_4326', 'utf-8');
+    """.format(outDir, gap_id)
+    cursorQ.executescript(sql2)
+
+    # Create a table to store presence information for range compilations.
+    sql3 = """
+    CREATE TABLE presence AS SELECT range_2001v1.strHUC12RNG,
+                                    range_2001v1.intGAPPresence AS predicted_presence,
+                                    shucs.geom_5070
+                             FROM range_2001v1 LEFT JOIN shucs
+                                               ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
 
     /* Transform to 4326 for displaying purposes*/
     ALTER TABLE presence ADD COLUMN geom_4326 INTEGER;
@@ -266,13 +313,15 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON', 'XY');
 
     SELECT ExportSHP('presence', 'geom_4326', '{0}{1}_presence_4326', 'utf-8');
-    """.format(outDir, gap_id)
 
-    cursorQ.executescript(sql2)
+    """.format(outDir, gap_id)
+    cursorQ.executescript(sql3)
     conn.commit()
     conn.close()
     del cursorQ
 
+
+'''
 def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
     """
     Uses occurrence data collected with the wildlife-wrangler repo
@@ -306,14 +355,17 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     import os
 
     cursor, conn = spatialite(parameters_db)
-    method = cursor.execute("SELECT method FROM evaluations WHERE evaluation_id = ?;", (eval_id,)).fetchone()[0]
+    method = cursor.execute("""SELECT method
+                               FROM evaluations
+                               WHERE evaluation_id = ?;""",
+                               (eval_id,)).fetchone()[0]
     conn.close()
     del cursor
 
     # Range evaluation database.
     cursor, conn = spatialite(eval_db)
-
-    cursor.executescript("""ATTACH DATABASE '{0}/evaluations.sqlite' AS params;""".format(codeDir))
+    cursor.executescript("""ATTACH DATABASE '{0}'
+                            AS params;""".format(parameters_db))
 
     sql2="""
     /*#############################################################################
@@ -445,7 +497,8 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     conn.commit()
     conn.close()
 
-def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
+'''
+def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                     outDir, codeDir):
     """
     Uses occurrence data collected with the wildlife-wrangler repo
@@ -472,6 +525,7 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     import sqlite3
     import os
 
+    # Connect to evaluation database.
     cursor, conn = spatialite(parameters_db)
     method = cursor.execute("""SELECT method
                                FROM evaluations
@@ -480,26 +534,28 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     conn.close()
     del cursor
 
-    # Range evaluation database.
+    # Attach the database with range processing parameters.
     cursor, conn = spatialite(eval_db)
-
-    cursor.executescript("""ATTACH DATABASE '{0}/evaluations.sqlite' AS params;
-                         """.format(codeDir))
+    cursor.executescript("""ATTACH DATABASE '{0}'
+                            AS params;""".format(parameters_db))
 
     sql2="""
     /*#############################################################################
                                  Assess Agreement
      ############################################################################*/
 
-    /*#########################  Which HUCs contain an occurrence?
-     #############################################################*/
+    /*#########################  Which HUCs intersect with an occurrence?
+     ##################################################################
+     Create and populate a new field called "weight_sum" for the sum of
+      weights from records that can be assigned to each huc.  */
     /*  Intersect occurrence circles with hucs  */
     CREATE TABLE green AS
                   SELECT shucs.HUC12RNG, ox.occ_id,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
                                                   ox.polygon_5070)) AS geom_5070
                   FROM shucs, evaluation_occurrences AS ox
-                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
+                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070)
+                  AND STRFTIME('%Y', ox.occurrenceDate) {3};
 
     SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
@@ -519,7 +575,7 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                                               AND species_id = '{1}'))
                               AND 100;
 
-    /*  How many occurrences in each huc that had an occurrence? */
+    /* Add summed weight column */
     ALTER TABLE sp_range ADD COLUMN weight_sum INTEGER;
 
     UPDATE sp_range
@@ -539,15 +595,18 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
 
 
     /*############################  Does HUC contain enough weight?
-    #############################################################*/
+    #############################################################
+    Add and populate a column called "eval" for whether or not the minimum
+    summed weight of 10 is reached for that hucs with occurrences records
+    intersecting them.
+    */
     ALTER TABLE sp_range ADD COLUMN eval INTEGER;
 
     /*  Record in sp_range that gap and gbif agreed on species presence, in light
     of the minimum weight of 10 */
     UPDATE sp_range
-    SET eval = 1
+    SET documented = 1
     WHERE weight_sum >= 10;
-
 
     /*  For new records, put zeros in GAP range attribute fields  */
     UPDATE sp_range
@@ -555,7 +614,7 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
         intGAPPresence = 0,
         intGAPReproduction = 0,
         intGAPSeason = 0,
-        eval = 0
+        documented = 0
     WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
 
 
@@ -567,7 +626,7 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
 
     UPDATE sp_range
     SET validated_presence = 1
-    WHERE eval = 1;
+    WHERE documented = 1;
 
 
     /*#############################################################################
@@ -590,14 +649,14 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                      'utf-8');
 
     /* Make a shapefile of evaluation results */
-    CREATE TABLE eval AS
-                  SELECT strHUC12RNG, eval, geom_4326
+    CREATE TABLE documented AS
+                  SELECT strHUC12RNG, documented, geom_4326
                   FROM new_range
-                  WHERE eval >= 0;
+                  WHERE documented >= 0;
 
-    SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('documented', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-    SELECT ExportSHP('eval', 'geom_4326', '{2}{1}_eval', 'utf-8');
+    SELECT ExportSHP('documented', 'geom_4326', '{2}{1}_documented', 'utf-8');
 
 
     /*#############################################################################
@@ -606,10 +665,17 @@ def build_GAP_range(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     /*  */
     DROP TABLE green;
     DROP TABLE orange;
-    """.format(eval_id, gap_id, outDir, cutoff_year)
+    """
 
+    # Historic
     try:
-        cursor.executescript(sql2)
+        cursor.executescript(sql2.format(eval_id, gap_id, outDir, '< cutoff_year'))
+    except Exception as e:
+        print(e)
+
+    # Recent
+    try:
+        cursor.executescript(sql2.format(eval_id, gap_id, outDir, '>= cutoff_year'))
     except Exception as e:
         print(e)
 
