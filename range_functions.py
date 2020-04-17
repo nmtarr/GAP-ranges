@@ -17,14 +17,6 @@ RangeCodesDict2020 = {"Presence": {1: "Documented present", 2: "Predicted presen
                                    5: "Extirpated purposely (applies to introduced species only)",
                                    6: "Occurs on indicated island chain", 7: "Unknown"}}
 
-def concat_dbs(recent_dbs):
-    """
-    Combines two output databases produced with the wildlife-wranger repo.
-        Combines tables by concatenating them.
-    """
-    outDB = ""
-    return outDB
-
 def getRecordDetails(key):
     """
     Returns a dictionary holding all GBIF details about the record.
@@ -59,7 +51,7 @@ def spatialite(db):
     Creates a connection and cursor for sqlite db and enables
     spatialite extension and shapefile functions.
 
-    (db) --> connection, cursor
+    (db) --> cursor, connection
 
     Arguments:
     db -- path to the db you want to create or connect to.
@@ -320,6 +312,246 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     conn.close()
     del cursorQ
 
+def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
+                         outDir, codeDir):
+    """
+    Uses occurrence data collected with the wildlife-wrangler repo
+    to build an updated GAP range map for a species.  The previous GAP range
+    is used along with recent and historic occurrence records acquired with
+    the wildlife-wrangler.
+
+    The results of this code are a new column in the GAP range table (in the db
+    created for the task) and a range shapefile.
+
+    Parameters:
+    eval_id -- name/code for the update (e.g., 2020v1)
+    gap_id -- gap species code.
+    eval_db -- path to the evaluation database.  It should have been created with
+                make_evaluation_db() so the schema is correct.
+    cutoff_year -- year before which records are considered 'historic'.  Occurrence
+                records from or more recent than the cutoff year will be
+                considered 'recent'.
+    parameters_db -- database with information on range update and evaluation
+                criteria.
+    outDir -- directory of
+    codeDir -- directory of code repo
+    """
+    import sqlite3
+    import os
+    from datetime import datetime
+    time0 = datetime.now()
+    # Open evaluation db and attach the database with range processing parameters.
+    cursor, conn = spatialite(eval_db)
+    cursor.executescript("""ATTACH DATABASE '{0}'
+                            AS params;""".format(parameters_db))
+
+    ##############################################  Add some columns to presence
+    ############################################################################
+    sql="""
+    ALTER TABLE presence ADD COLUMN documented_historic INTEGER;
+    ALTER TABLE presence ADD COLUMN documented_recent INTEGER;
+    ALTER TABLE presence ADD COLUMN age_of_last(y) INTEGER;
+    ALTER TABLE presence ADD COLUMN presence_2020v1 INTEGER;
+    """
+    try:
+        cursor.executescript(sql)
+    except Exception as e:
+        print(e)
+
+    ######################################### Which HUCs were recently occupied?
+    ############################################################################
+    # Work on populating documented_recent column.
+    '''
+    Get a table with occurrences from the right time period with the names of
+    hucs that they intersect (proportion in polygon assessement comes later).
+    green -- occurrences of suitable age and the hucs they intersect at all.
+             Records are fragments of circles after intersection with hucs.
+    '''
+    # First filter out records with unnacceptable dates to reduce workload
+    sql="""
+    CREATE TABLE good_age AS
+                            SELECT *
+                            FROM evaluation_occurrences
+                            WHERE occurrenceDate {0}
+    """.format('>=' + str(cutoff_year))
+    try:
+        cursor.executescript(sql)
+        time1 = datetime.now()
+        print("Filtered out records with unsuitable age: " + str(time1-time0))
+    except Exception as e:
+        time1 = datetime.now()
+        print("!! FAILED to filter on record age: " + str(time1-time0))
+        print(e)
+
+
+    sql="""
+    CREATE TABLE green AS
+                  SELECT shucs.HUC12RNG, ox.occ_id, ox.weight,
+                  CastToMultiPolygon(Intersection(shucs.geom_5070,
+                                                  ox.polygon_5070)) AS geom_5070
+                  FROM shucs, good_age AS ox
+                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
+
+    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
+                                 'XY');
+    """
+    try:
+        cursor.executescript(sql)
+        time1 = datetime.now()
+        print("Found hucs that intersect an occurrence: " + str(time1-time0))
+    except Exception as e:
+        time1 = datetime.now()
+        print("!! FAILED to find hucs that intersect an occurrence: " + str(time1-time0))
+        print(e)
+
+
+
+    """
+    Use the error tolerance for the species to select those occurrences that
+    can be attributed to a HUC.
+    orange -- records from table green that have enough overlap to attribute
+              to a huc.
+    """
+    sql="""
+    CREATE TABLE orange AS
+      SELECT green.HUC12RNG, green.occ_id, green.weight,
+             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
+                AS proportion_circle
+      FROM green
+           LEFT JOIN evaluation_occurrences AS ox
+           ON green.occ_id = ox.occ_id
+      WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
+                                              FROM params.evaluations
+                                              WHERE evaluation_id = '{0}'
+                                              AND species_id = '{1}'))
+                              AND 100;
+    """
+    try:
+        cursor.executescript(sql)
+        time2 = datetime.now()
+        print('Determined which records overlap enough: ' + str(time2 - time1))
+    except Exception as e:
+        time2 = datetime.now()
+        print(e)
+    conn.commit()
+    conn.close()
+
+
+
+
+
+
+    '''
+    sql="""
+    /* Add summed weight column */
+    ALTER TABLE presence ADD COLUMN weight_sum INTEGER;
+
+    UPDATE presence
+    SET weight_sum = (SELECT SUM(weight)
+                          FROM orange
+                          WHERE HUC12RNG = range_2001v1.strHUC12RNG
+                          GROUP BY HUC12RNG);
+
+
+    /*  Find hucs that contained gbif occurrences, but were not in gaprange and
+    insert them into sp_range as new records.  Record the occurrence count */
+    INSERT INTO sp_range (strHUC12RNG, weight_sum)
+                SELECT orange.HUC12RNG, SUM(weight)
+                FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
+                WHERE sp_range.strHUC12RNG IS NULL
+                GROUP BY orange.HUC12RNG;
+
+
+    /*############################  Does HUC contain enough weight?
+    #############################################################
+    Add and populate a column called "eval" for whether or not the minimum
+    summed weight of 10 is reached for that hucs with occurrences records
+    intersecting them.
+    */
+    ALTER TABLE sp_range ADD COLUMN eval INTEGER;
+
+    /*  Record in sp_range that gap and gbif agreed on species presence, in light
+    of the minimum weight of 10 */
+    UPDATE sp_range
+    SET documented = 1
+    WHERE weight_sum >= 10;
+
+    /*  For new records, put zeros in GAP range attribute fields  */
+    UPDATE sp_range
+    SET intGAPOrigin = 0,
+        intGAPPresence = 0,
+        intGAPReproduction = 0,
+        intGAPSeason = 0,
+        documented = 0
+    WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
+    """
+    # Historic
+    try:
+        cursor.executescript(sql.format(eval_id, gap_id, outDir, '< cutoff_year'))
+    except Exception as e:
+        print(e)
+
+    # Recent
+    try:
+        cursor.executescript(sql.format(eval_id, gap_id, outDir, '>= cutoff_year'))
+    except Exception as e:
+        print(e)
+
+    """
+
+    /*###########################################  Validation column
+    #############################################################*/
+    /*  Populate a validation column.  If an evaluation supports the GAP ranges
+    then it is validated */
+    ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
+
+    UPDATE sp_range
+    SET validated_presence = 1
+    WHERE documented = 1;
+    """
+
+    """
+
+    /*#############################################################################
+                                   Export Maps
+     ############################################################################*/
+    /*  Create a version of sp_range with geometry  */
+    CREATE TABLE new_range AS
+                  SELECT sp_range.*, shucs.geom_5070
+                  FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
+
+    ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
+
+    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
+
+    UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
+
+    SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
+
+    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2020v1',
+                     'utf-8');
+
+    /* Make a shapefile of evaluation results */
+    CREATE TABLE documented AS
+                  SELECT strHUC12RNG, documented, geom_4326
+                  FROM new_range
+                  WHERE documented >= 0;
+
+    SELECT RecoverGeometryColumn('documented', 'geom_4326', 4326, 'POLYGON', 'XY');
+
+    SELECT ExportSHP('documented', 'geom_4326', '{2}{1}_documented', 'utf-8');
+
+
+    /*#############################################################################
+                                 Clean Up
+    #############################################################################*/
+    /*  */
+    DROP TABLE green;
+    DROP TABLE orange;
+    """
+    '''
+
+
 
 '''
 def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
@@ -498,186 +730,3 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     conn.close()
 
 '''
-def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
-                    outDir, codeDir):
-    """
-    Uses occurrence data collected with the wildlife-wrangler repo
-    to build an updated GAP range map for a species.  The previous GAP range
-    is used along with recent and historic occurrence records acquired with
-    the wildlife-wrangler.
-
-    The results of this code are a new column in the GAP range table (in the db
-    created for the task) and a range shapefile.
-
-    Parameters:
-    eval_id -- name/code for the update (e.g., 2020v1)
-    gap_id -- gap species code.
-    eval_db -- path to the evaluation database.  It should have been created with
-                make_evaluation_db() so the schema is correct.
-    cutoff_year -- year before which records are considered 'historic'.  Occurrence
-                records from or more recent than the cutoff year will be
-                considered 'recent'.
-    parameters_db -- database with information on range update and evaluation
-                criteria.
-    outDir -- directory of
-    codeDir -- directory of code repo
-    """
-    import sqlite3
-    import os
-
-    # Connect to evaluation database.
-    cursor, conn = spatialite(parameters_db)
-    method = cursor.execute("""SELECT method
-                               FROM evaluations
-                               WHERE evaluation_id = ?;
-                            """, (eval_id,)).fetchone()[0]
-    conn.close()
-    del cursor
-
-    # Attach the database with range processing parameters.
-    cursor, conn = spatialite(eval_db)
-    cursor.executescript("""ATTACH DATABASE '{0}'
-                            AS params;""".format(parameters_db))
-
-    sql2="""
-    /*#############################################################################
-                                 Assess Agreement
-     ############################################################################*/
-
-    /*#########################  Which HUCs intersect with an occurrence?
-     ##################################################################
-     Create and populate a new field called "weight_sum" for the sum of
-      weights from records that can be assigned to each huc.  */
-    /*  Intersect occurrence circles with hucs  */
-    CREATE TABLE green AS
-                  SELECT shucs.HUC12RNG, ox.occ_id,
-                  CastToMultiPolygon(Intersection(shucs.geom_5070,
-                                                  ox.polygon_5070)) AS geom_5070
-                  FROM shucs, evaluation_occurrences AS ox
-                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070)
-                  AND STRFTIME('%Y', ox.occurrenceDate) {3};
-
-    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
-                                 'XY');
-
-    /* In light of the error tolerance for the species, which occurrences can
-       be attributed to a huc?  */
-    CREATE TABLE orange AS
-      SELECT green.HUC12RNG, green.occ_id,
-             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
-                AS proportion_circle
-      FROM green
-           LEFT JOIN evaluation_occurrences AS ox
-           ON green.occ_id = ox.occ_id
-      WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
-                                              FROM params.evaluations
-                                              WHERE evaluation_id = '{0}'
-                                              AND species_id = '{1}'))
-                              AND 100;
-
-    /* Add summed weight column */
-    ALTER TABLE sp_range ADD COLUMN weight_sum INTEGER;
-
-    UPDATE sp_range
-    SET weight_sum = (SELECT SUM(weight)
-                          FROM orange
-                          WHERE HUC12RNG = sp_range.strHUC12RNG
-                          GROUP BY HUC12RNG);
-
-
-    /*  Find hucs that contained gbif occurrences, but were not in gaprange and
-    insert them into sp_range as new records.  Record the occurrence count */
-    INSERT INTO sp_range (strHUC12RNG, weight_sum)
-                SELECT orange.HUC12RNG, SUM(weight)
-                FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
-                WHERE sp_range.strHUC12RNG IS NULL
-                GROUP BY orange.HUC12RNG;
-
-
-    /*############################  Does HUC contain enough weight?
-    #############################################################
-    Add and populate a column called "eval" for whether or not the minimum
-    summed weight of 10 is reached for that hucs with occurrences records
-    intersecting them.
-    */
-    ALTER TABLE sp_range ADD COLUMN eval INTEGER;
-
-    /*  Record in sp_range that gap and gbif agreed on species presence, in light
-    of the minimum weight of 10 */
-    UPDATE sp_range
-    SET documented = 1
-    WHERE weight_sum >= 10;
-
-    /*  For new records, put zeros in GAP range attribute fields  */
-    UPDATE sp_range
-    SET intGAPOrigin = 0,
-        intGAPPresence = 0,
-        intGAPReproduction = 0,
-        intGAPSeason = 0,
-        documented = 0
-    WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
-
-
-    /*###########################################  Validation column
-    #############################################################*/
-    /*  Populate a validation column.  If an evaluation supports the GAP ranges
-    then it is validated */
-    ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
-
-    UPDATE sp_range
-    SET validated_presence = 1
-    WHERE documented = 1;
-
-
-    /*#############################################################################
-                                   Export Maps
-     ############################################################################*/
-    /*  Create a version of sp_range with geometry  */
-    CREATE TABLE new_range AS
-                  SELECT sp_range.*, shucs.geom_5070
-                  FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
-
-    ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
-
-    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
-
-    UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
-
-    SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
-
-    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2020v1',
-                     'utf-8');
-
-    /* Make a shapefile of evaluation results */
-    CREATE TABLE documented AS
-                  SELECT strHUC12RNG, documented, geom_4326
-                  FROM new_range
-                  WHERE documented >= 0;
-
-    SELECT RecoverGeometryColumn('documented', 'geom_4326', 4326, 'POLYGON', 'XY');
-
-    SELECT ExportSHP('documented', 'geom_4326', '{2}{1}_documented', 'utf-8');
-
-
-    /*#############################################################################
-                                 Clean Up
-    #############################################################################*/
-    /*  */
-    DROP TABLE green;
-    DROP TABLE orange;
-    """
-
-    # Historic
-    try:
-        cursor.executescript(sql2.format(eval_id, gap_id, outDir, '< cutoff_year'))
-    except Exception as e:
-        print(e)
-
-    # Recent
-    try:
-        cursor.executescript(sql2.format(eval_id, gap_id, outDir, '>= cutoff_year'))
-    except Exception as e:
-        print(e)
-
-    conn.commit()
-    conn.close()
