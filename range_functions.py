@@ -1,5 +1,5 @@
 RangeCodesDict2001 = {"Presence": {1: "Known/extant", 2: "Possibly present", 3: "Potential for presence",
-                               4: "Extirpated/historical presence",
+                               4: "Extirpated/historicalal presence",
                                5: "Extirpated purposely (applies to introduced species only)",
                                 6: "Occurs on indicated island chain", 7: "Unknown"},
                 "Origin": {1: "Native", 2: "Introduced", 3: "Either introducted or native",
@@ -328,7 +328,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     gap_id -- gap species code.
     eval_db -- path to the evaluation database.  It should have been created with
                 make_evaluation_db() so the schema is correct.
-    cutoff_year -- year before which records are considered 'historic'.  Occurrence
+    cutoff_year -- year before which records are considered 'historical'.  Occurrence
                 records from or more recent than the cutoff year will be
                 considered 'recent'.
     parameters_db -- database with information on range update and evaluation
@@ -348,84 +348,139 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     ##############################################  Add some columns to presence
     ############################################################################
     sql="""
-    ALTER TABLE presence ADD COLUMN documented_historic INTEGER;
+    ALTER TABLE presence ADD COLUMN documented_historical INTEGER;
     ALTER TABLE presence ADD COLUMN documented_recent INTEGER;
-    ALTER TABLE presence ADD COLUMN age_of_last(y) INTEGER;
+    ALTER TABLE presence ADD COLUMN age_of_last INTEGER;
     ALTER TABLE presence ADD COLUMN presence_2020v1 INTEGER;
     """
     try:
         cursor.executescript(sql)
+        print("Added columns: " + str(datetime.now() - time0))
     except Exception as e:
         print(e)
+        print("Some columns not added")
 
     ######################################### Which HUCs were recently occupied?
     ############################################################################
-    # Work on populating documented_recent column.
-    '''
+    """
     Get a table with occurrences from the right time period with the names of
     hucs that they intersect (proportion in polygon assessement comes later).
-    green -- occurrences of suitable age and the hucs they intersect at all.
+    intersected_recent -- occurrences of suitable age and the hucs they intersect at all.
              Records are fragments of circles after intersection with hucs.
-    '''
+    This ultimately populates the documented_recent column.
+    """
     # First filter out records with unnacceptable dates to reduce workload
+    # RECENT
+    time1 = datetime.now()
     sql="""
-    CREATE TABLE good_age AS
+    CREATE TABLE recent_records AS
                             SELECT *
                             FROM evaluation_occurrences
                             WHERE occurrenceDate {0}
     """.format('>=' + str(cutoff_year))
     try:
         cursor.executescript(sql)
-        time1 = datetime.now()
-        print("Filtered out records with unsuitable age: " + str(time1-time0))
+        print("Isolated recent records: " + str(datetime.now()-time1))
     except Exception as e:
-        time1 = datetime.now()
-        print("!! FAILED to filter on record age: " + str(time1-time0))
+        print("!!! FAILED to filter for recent records")
+        print(e)
+
+    # HISTORIC
+    time1 = datetime.now()
+    sql="""
+    CREATE TABLE historical_records AS
+                            SELECT *
+                            FROM evaluation_occurrences
+                            WHERE occurrenceDate {0}
+    """.format('<=' + str(cutoff_year))
+    try:
+        cursor.executescript(sql)
+        print("Isolated historical records: " + str(datetime.now()-time1))
+    except Exception as e:
+        print("!!! FAILED to filter for historical records: " + str(datetime.now()-time1))
         print(e)
 
 
+    # Intersect occurrence circles with hucs.
+    # intersected_recent -- table with rows for intersected circles and hucs
+    # HISTORICAL
+    time1 = datetime.now()
     sql="""
-    CREATE TABLE green AS
+    CREATE TABLE intersected_historical AS
                   SELECT shucs.HUC12RNG, ox.occ_id, ox.weight,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
                                                   ox.polygon_5070)) AS geom_5070
-                  FROM shucs, good_age AS ox
+                  FROM shucs, historical_records AS ox
                   WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
-    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
-                                 'XY');
-    """
+    SELECT RecoverGeometryColumn('intersected_historical', 'geom_5070', 5070, 'MULTIPOLYGON',
+                                 'XY');"""
     try:
         cursor.executescript(sql)
-        time1 = datetime.now()
-        print("Found hucs that intersect an occurrence: " + str(time1-time0))
+        print("Found hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
     except Exception as e:
-        time1 = datetime.now()
-        print("!! FAILED to find hucs that intersect an occurrence: " + str(time1-time0))
+        print("!! FAILED to find hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
         print(e)
 
+    # RECENT
+    time1 = datetime.now()
+    sql="""
+    CREATE TABLE intersected_recent AS
+                  SELECT shucs.HUC12RNG, ox.occ_id, ox.weight,
+                  CastToMultiPolygon(Intersection(shucs.geom_5070,
+                                                  ox.polygon_5070)) AS geom_5070
+                  FROM shucs, recent_records AS ox
+                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
+    SELECT RecoverGeometryColumn('intersected_recent', 'geom_5070', 5070, 'MULTIPOLYGON',
+                                 'XY');"""
+    try:
+        cursor.executescript(sql)
+        print("Found hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
+    except Exception as e:
+        print("!! FAILED to find hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
+        print(e)
 
+    # Filter out circle fragments that aren't big enough (% of total circle)
     """
     Use the error tolerance for the species to select those occurrences that
     can be attributed to a HUC.
-    orange -- records from table green that have enough overlap to attribute
-              to a huc.
+    big_nuff_recent -- records from table intersected_recent that have
+            enough overlap to attribute to a huc.
+    big_nuff_historical -- records from table intersected_historical that have
+            enough overlap to attribute to a huc.
     """
     sql="""
-    CREATE TABLE orange AS
-      SELECT green.HUC12RNG, green.occ_id, green.weight,
-             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
+    CREATE TABLE big_nuff_recent AS
+      SELECT intersected_recent.HUC12RNG,
+             intersected_recent.occ_id,
+             intersected_recent.weight,
+             100 * (Area(intersected_recent.geom_5070) / Area(ox.polygon_5070))
                 AS proportion_circle
-      FROM green
+      FROM intersected_recent
            LEFT JOIN evaluation_occurrences AS ox
-           ON green.occ_id = ox.occ_id
+           ON intersected_recent.occ_id = ox.occ_id
       WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
                                               FROM params.evaluations
                                               WHERE evaluation_id = '{0}'
                                               AND species_id = '{1}'))
                               AND 100;
-    """
+
+    CREATE TABLE big_nuff_historical AS
+      SELECT intersected_historical.HUC12RNG,
+             intersected_historical.occ_id,
+             intersected_historical.weight,
+             100 * (Area(intersected_historical.geom_5070) / Area(ox.polygon_5070))
+                AS proportion_circle
+      FROM intersected_historical
+           LEFT JOIN evaluation_occurrences AS ox
+           ON intersected_historical.occ_id = ox.occ_id
+      WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
+                                              FROM params.evaluations
+                                              WHERE evaluation_id = '{0}'
+                                              AND species_id = '{1}'))
+                              AND 100;
+    """.format(eval_id, gap_id)
     try:
         cursor.executescript(sql)
         time2 = datetime.now()
@@ -433,125 +488,80 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     except Exception as e:
         time2 = datetime.now()
         print(e)
-    conn.commit()
-    conn.close()
 
-
-
-
-
-
-    '''
+    ################################ Add summed weight column
+    # Column to make note of hucs in presence that have enough evidence
     sql="""
-    /* Add summed weight column */
-    ALTER TABLE presence ADD COLUMN weight_sum INTEGER;
+    ALTER TABLE presence ADD COLUMN recent_weight INTEGER;
 
     UPDATE presence
-    SET weight_sum = (SELECT SUM(weight)
-                          FROM orange
-                          WHERE HUC12RNG = range_2001v1.strHUC12RNG
-                          GROUP BY HUC12RNG);
+    SET recent_weight = (SELECT SUM(weight)
+                         FROM big_nuff_recent
+                         WHERE HUC12RNG = presence.strHUC12RNG
+                         GROUP BY HUC12RNG);
 
+    ALTER TABLE presence ADD COLUMN historical_weight INTEGER;
 
-    /*  Find hucs that contained gbif occurrences, but were not in gaprange and
-    insert them into sp_range as new records.  Record the occurrence count */
-    INSERT INTO sp_range (strHUC12RNG, weight_sum)
-                SELECT orange.HUC12RNG, SUM(weight)
-                FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
-                WHERE sp_range.strHUC12RNG IS NULL
-                GROUP BY orange.HUC12RNG;
-
-
-    /*############################  Does HUC contain enough weight?
-    #############################################################
-    Add and populate a column called "eval" for whether or not the minimum
-    summed weight of 10 is reached for that hucs with occurrences records
-    intersecting them.
-    */
-    ALTER TABLE sp_range ADD COLUMN eval INTEGER;
-
-    /*  Record in sp_range that gap and gbif agreed on species presence, in light
-    of the minimum weight of 10 */
-    UPDATE sp_range
-    SET documented = 1
-    WHERE weight_sum >= 10;
-
-    /*  For new records, put zeros in GAP range attribute fields  */
-    UPDATE sp_range
-    SET intGAPOrigin = 0,
-        intGAPPresence = 0,
-        intGAPReproduction = 0,
-        intGAPSeason = 0,
-        documented = 0
-    WHERE weight_sum >= 0 AND intGAPOrigin IS NULL;
-    """
-    # Historic
+    UPDATE presence
+    SET historical_weight = (SELECT SUM(weight)
+                             FROM big_nuff_historical
+                             WHERE HUC12RNG = presence.strHUC12RNG
+                             GROUP BY HUC12RNG);"""
     try:
-        cursor.executescript(sql.format(eval_id, gap_id, outDir, '< cutoff_year'))
+        cursor.executescript(sql)
+        time3 = datetime.now()
+        print('Determined weight of recent evidence for hucs : ' + str(time3 - time2))
     except Exception as e:
+        time3 = datetime.now()
         print(e)
 
-    # Recent
+
+    # Find hucs that contained gbif occurrences, but were not in gaprange and
+    # insert them into sp_range as new records.
+    sql="""
+    INSERT INTO presence (strHUC12RNG, recent_weight)
+                SELECT big_nuff_recent.HUC12RNG, SUM(big_nuff_recent.weight)
+                FROM big_nuff_recent LEFT JOIN presence
+                                        ON presence.strHUC12RNG = big_nuff_recent.HUC12RNG
+                WHERE presence.strHUC12RNG IS NULL
+                GROUP BY big_nuff_recent.HUC12RNG;
+
+    INSERT INTO presence (strHUC12RNG, historical_weight)
+                SELECT big_nuff_historical.HUC12RNG, SUM(big_nuff_historical.weight)
+                FROM big_nuff_historical LEFT JOIN presence
+                                            ON presence.strHUC12RNG = big_nuff_historical.HUC12RNG
+                WHERE presence.strHUC12RNG IS NULL
+                GROUP BY big_nuff_historical.HUC12RNG;"""
     try:
-        cursor.executescript(sql.format(eval_id, gap_id, outDir, '>= cutoff_year'))
+        time3 = datetime.now()
+        cursor.executescript(sql)
+        time4 = datetime.now()
+        print('Added rows for hucs with enough weight but not in GAP range : ' + str(time4 - time3))
     except Exception as e:
+        time3 = datetime.now()
         print(e)
 
+    ############################  Record which hucs have sufficient evidence
+    ########################################################################
+    sql="""/*  Mark records/hucs that have sufficient evidence*/
+    UPDATE presence
+    SET documented_recent = 1
+    WHERE recent_weight >= 10;
+
+    UPDATE presence
+    SET documented_historical = 1
+    WHERE historical_weight >= 10;
     """
-
-    /*###########################################  Validation column
-    #############################################################*/
-    /*  Populate a validation column.  If an evaluation supports the GAP ranges
-    then it is validated */
-    ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
-
-    UPDATE sp_range
-    SET validated_presence = 1
-    WHERE documented = 1;
-    """
-
-    """
-
-    /*#############################################################################
-                                   Export Maps
-     ############################################################################*/
-    /*  Create a version of sp_range with geometry  */
-    CREATE TABLE new_range AS
-                  SELECT sp_range.*, shucs.geom_5070
-                  FROM sp_range LEFT JOIN shucs ON sp_range.strHUC12RNG = shucs.HUC12RNG;
-
-    ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
-
-    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
-
-    UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
-
-    SELECT RecoverGeometryColumn('new_range', 'geom_4326', 4326, 'POLYGON', 'XY');
-
-    SELECT ExportSHP('new_range', 'geom_4326', '{2}{1}_CONUS_Range_2020v1',
-                     'utf-8');
-
-    /* Make a shapefile of evaluation results */
-    CREATE TABLE documented AS
-                  SELECT strHUC12RNG, documented, geom_4326
-                  FROM new_range
-                  WHERE documented >= 0;
-
-    SELECT RecoverGeometryColumn('documented', 'geom_4326', 4326, 'POLYGON', 'XY');
-
-    SELECT ExportSHP('documented', 'geom_4326', '{2}{1}_documented', 'utf-8');
-
-
-    /*#############################################################################
-                                 Clean Up
-    #############################################################################*/
-    /*  */
-    DROP TABLE green;
-    DROP TABLE orange;
-    """
-    '''
-
-
+    try:
+        time4 = datetime.now()
+        cursor.executescript(sql)
+        time5 = datetime.now()
+        print('Filled out documented_recent column in presence table : ' + str(time5 - time4))
+    except Exception as e:
+        time3 = datetime.now()
+        print(e)
+    conn.commit()
+    conn.close()
 
 '''
 def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
@@ -607,25 +617,25 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     /*#########################  Which HUCs contain an occurrence?
      #############################################################*/
     /*  Intersect occurrence circles with hucs  */
-    CREATE TABLE green AS
+    CREATE TABLE intersected_recent AS
                   SELECT shucs.HUC12RNG, ox.occ_id,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
                                                   ox.polygon_5070)) AS geom_5070
                   FROM shucs, evaluation_occurrences AS ox
                   WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
-    SELECT RecoverGeometryColumn('green', 'geom_5070', 5070, 'MULTIPOLYGON',
+    SELECT RecoverGeometryColumn('intersected_recent', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
 
     /* In light of the error tolerance for the species, which occurrences can
        be attributed to a huc?  */
-    CREATE TABLE orange AS
-      SELECT green.HUC12RNG, green.occ_id,
-             100 * (Area(green.geom_5070) / Area(ox.polygon_5070))
+    CREATE TABLE big_nuff_recent AS
+      SELECT intersected_recent.HUC12RNG, intersected_recent.occ_id,
+             100 * (Area(intersected_recent.geom_5070) / Area(ox.polygon_5070))
                 AS proportion_circle
-      FROM green
+      FROM intersected_recent
            LEFT JOIN evaluation_occurrences AS ox
-           ON green.occ_id = ox.occ_id
+           ON intersected_recent.occ_id = ox.occ_id
       WHERE proportion_circle BETWEEN (100 - (SELECT error_tolerance
                                               FROM params.evaluations
                                               WHERE evaluation_id = '{0}'
@@ -637,7 +647,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
 
     UPDATE sp_range
     SET weight_sum = (SELECT SUM(weight)
-                          FROM orange
+                          FROM big_nuff_recent
                           WHERE HUC12RNG = sp_range.strHUC12RNG
                           GROUP BY HUC12RNG);
 
@@ -645,10 +655,10 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     /*  Find hucs that contained gbif occurrences, but were not in gaprange and
     insert them into sp_range as new records.  Record the occurrence count */
     INSERT INTO sp_range (strHUC12RNG, weight_sum)
-                SELECT orange.HUC12RNG, SUM(weight)
-                FROM orange LEFT JOIN sp_range ON sp_range.strHUC12RNG = orange.HUC12RNG
+                SELECT big_nuff_recent.HUC12RNG, SUM(weight)
+                FROM big_nuff_recent LEFT JOIN sp_range ON sp_range.strHUC12RNG = big_nuff_recent.HUC12RNG
                 WHERE sp_range.strHUC12RNG IS NULL
-                GROUP BY orange.HUC12RNG;
+                GROUP BY big_nuff_recent.HUC12RNG;
 
 
     /*############################  Does HUC contain enough weight?
@@ -717,8 +727,8 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
                                  Clean Up
     #############################################################################*/
     /*  */
-    DROP TABLE green;
-    DROP TABLE orange;
+    DROP TABLE intersected_recent;
+    DROP TABLE big_nuff_recent;
     """.format(eval_id, gap_id, outDir)
 
     try:
