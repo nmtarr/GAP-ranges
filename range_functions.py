@@ -1,7 +1,10 @@
-RangeCodesDict2001 = {"Presence": {1: "Known/extant", 2: "Possibly present", 3: "Potential for presence",
-                               4: "Extirpated/historicalal presence",
-                               5: "Extirpated purposely (applies to introduced species only)",
-                                6: "Occurs on indicated island chain", 7: "Unknown"},
+RangeCodesDict2001 = {"Presence": {1: "Known/extant",
+                                   2: "Possibly present",
+                                   3: "Potential for presence",
+                                   4: "Extirpated/historical presence",
+                                   5: "Extirpated purposely (applies to introduced species only)",
+                                   6: "Occurs on indicated island chain",
+                                   7: "Unknown"},
                 "Origin": {1: "Native", 2: "Introduced", 3: "Either introducted or native",
                            4: "Reintroduced", 5: "Either introduced or reintroduced",
                            6: "Vagrant", 7: "Unknown"},
@@ -11,11 +14,13 @@ RangeCodesDict2001 = {"Presence": {1: "Known/extant", 2: "Possibly present", 3: 
                             5: "Passage migrant or wanderer", 6: "Seasonal permanence uncertain",
                             7: "Unknown", 8: "Vagrant"}}
 
-RangeCodesDict2020 = {"Presence": {1: "Documented present", 2: "Predicted present",
-                                   3: "Documented historically present",
+RangeCodesDict2020 = {"Presence": {1: "Documented presence",
+                                   2: "Documented historically presence",
+                                   3: "Predicted presence",
                                    4: "Extirpated/historical presence",
                                    5: "Extirpated purposely (applies to introduced species only)",
-                                   6: "Occurs on indicated island chain", 7: "Unknown"}}
+                                   6: "Occurs on indicated island chain",
+                                   7: "Unknown"}}
 
 def getRecordDetails(key):
     """
@@ -407,7 +412,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     time1 = datetime.now()
     sql="""
     CREATE TABLE intersected_historical AS
-                  SELECT shucs.HUC12RNG, ox.occ_id, ox.weight,
+                  SELECT shucs.HUC12RNG, ox.occ_id, ox.occurrenceDate, ox.weight,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
                                                   ox.polygon_5070)) AS geom_5070
                   FROM shucs, historical_records AS ox
@@ -426,7 +431,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     time1 = datetime.now()
     sql="""
     CREATE TABLE intersected_recent AS
-                  SELECT shucs.HUC12RNG, ox.occ_id, ox.weight,
+                  SELECT shucs.HUC12RNG, ox.occ_id, ox.occurrenceDate, ox.weight,
                   CastToMultiPolygon(Intersection(shucs.geom_5070,
                                                   ox.polygon_5070)) AS geom_5070
                   FROM shucs, recent_records AS ox
@@ -454,6 +459,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     CREATE TABLE big_nuff_recent AS
       SELECT intersected_recent.HUC12RNG,
              intersected_recent.occ_id,
+             intersected_recent.occurrenceDate,
              intersected_recent.weight,
              100 * (Area(intersected_recent.geom_5070) / Area(ox.polygon_5070))
                 AS proportion_circle
@@ -469,6 +475,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     CREATE TABLE big_nuff_historical AS
       SELECT intersected_historical.HUC12RNG,
              intersected_historical.occ_id,
+             intersected_historical.occurrenceDate,
              intersected_historical.weight,
              100 * (Area(intersected_historical.geom_5070) / Area(ox.polygon_5070))
                 AS proportion_circle
@@ -535,8 +542,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     try:
         time3 = datetime.now()
         cursor.executescript(sql)
-        time4 = datetime.now()
-        print('Added rows for hucs with enough weight but not in GAP range : ' + str(time4 - time3))
+        print('Added rows for hucs with enough weight but not in GAP range : ' + str(datetime.now() - time3))
     except Exception as e:
         time3 = datetime.now()
         print(e)
@@ -560,6 +566,58 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     except Exception as e:
         time3 = datetime.now()
         print(e)
+
+    ##########################################  Fill out new presence column
+    ########################################################################
+    sql="""
+    /* NOTE:  The order of these statements matters and reflects their rank */
+    UPDATE presence SET presence_2020v1 = predicted_presence;
+
+    /* Reclass some values */
+    UPDATE presence SET presence_2020v1 = 3 WHERE presence_2020v1 in (1,2,3);
+
+    UPDATE presence SET presence_2020v1 = 2 WHERE documented_historical=1;
+
+    UPDATE presence SET presence_2020v1 = 1 WHERE documented_recent=1;
+    """
+    try:
+        time1 = datetime.now()
+        cursor.executescript(sql)
+        print('Filled out new presence column : ' + str(datetime.now() - time1))
+    except Exception as e:
+        time1 = datetime.now()
+        print(e)
+
+
+    #####################################  Calculate years since last record
+    ########################################################################
+    sql="""
+    /* Combine big nuff tables into one */
+    CREATE TABLE all_big_nuff AS SELECT * FROM big_nuff_recent;
+
+    INSERT INTO all_big_nuff SELECT * FROM big_nuff_historical;
+
+    /* Calculate years since record in a new column */
+    ALTER TABLE all_big_nuff ADD COLUMN years_since INTEGER;
+
+    UPDATE all_big_nuff
+    SET years_since = strftime('%Y', 'now') - strftime('%Y', occurrenceDate);
+
+    /* Choose first in a group by HUC12RNG */
+    UPDATE presence
+    SET age_of_last = (SELECT MIN(years_since)
+    				  FROM all_big_nuff
+    				  WHERE HUC12RNG = presence.strHUC12RNG
+    				  GROUP BY HUC12RNG);
+    """
+    try:
+        time1 = datetime.now()
+        cursor.executescript(sql)
+        print('Filled out new presence column : ' + str(datetime.now() - time1))
+    except Exception as e:
+        time1 = datetime.now()
+        print(e)
+
     conn.commit()
     conn.close()
 
