@@ -302,6 +302,9 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
                              FROM range_2001v1 LEFT JOIN shucs
                                                ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
 
+    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'POLYGON',
+                                 'XY');
+
     /* Transform to 4326 for displaying purposes*/
     ALTER TABLE presence ADD COLUMN geom_4326 INTEGER;
 
@@ -353,10 +356,10 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     ##############################################  Add some columns to presence
     ############################################################################
     sql="""
-    ALTER TABLE presence ADD COLUMN documented_historical INTEGER;
-    ALTER TABLE presence ADD COLUMN documented_recent INTEGER;
-    ALTER TABLE presence ADD COLUMN age_of_last INTEGER;
-    ALTER TABLE presence ADD COLUMN presence_2020v1 INTEGER;
+    ALTER TABLE presence ADD COLUMN documented_historical INT;
+    ALTER TABLE presence ADD COLUMN documented_recent INT;
+    ALTER TABLE presence ADD COLUMN age_of_last INT;
+    ALTER TABLE presence ADD COLUMN presence_2020v1 INT;
     """
     try:
         cursor.executescript(sql)
@@ -407,7 +410,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
 
 
     # Intersect occurrence circles with hucs.
-    # intersected_recent -- table with rows for intersected circles and hucs
+    # intersected_historical -- table with rows for intersected circles and hucs
     # HISTORICAL
     time1 = datetime.now()
     sql="""
@@ -418,8 +421,8 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                   FROM shucs, historical_records AS ox
                   WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
-    SELECT RecoverGeometryColumn('intersected_historical', 'geom_5070', 5070, 'MULTIPOLYGON',
-                                 'XY');"""
+    SELECT RecoverGeometryColumn('intersected_historical', 'geom_5070', 5070,
+                                 'MULTIPOLYGON', 'XY');"""
     try:
         cursor.executescript(sql)
         print("Found hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
@@ -431,14 +434,14 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     time1 = datetime.now()
     sql="""
     CREATE TABLE intersected_recent AS
-                  SELECT shucs.HUC12RNG, ox.occ_id, ox.occurrenceDate, ox.weight,
-                  CastToMultiPolygon(Intersection(shucs.geom_5070,
-                                                  ox.polygon_5070)) AS geom_5070
-                  FROM shucs, recent_records AS ox
-                  WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
+                 SELECT shucs.HUC12RNG, ox.occ_id, ox.occurrenceDate, ox.weight,
+                 CastToMultiPolygon(Intersection(shucs.geom_5070,
+                                                 ox.polygon_5070)) AS geom_5070
+                 FROM shucs, recent_records AS ox
+                 WHERE Intersects(shucs.geom_5070, ox.polygon_5070);
 
-    SELECT RecoverGeometryColumn('intersected_recent', 'geom_5070', 5070, 'MULTIPOLYGON',
-                                 'XY');"""
+    SELECT RecoverGeometryColumn('intersected_recent', 'geom_5070', 5070,
+                                 'MULTIPOLYGON', 'XY');"""
     try:
         cursor.executescript(sql)
         print("Found hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
@@ -499,7 +502,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     ################################ Add summed weight column
     # Column to make note of hucs in presence that have enough evidence
     sql="""
-    ALTER TABLE presence ADD COLUMN recent_weight INTEGER;
+    ALTER TABLE presence ADD COLUMN recent_weight INT;
 
     UPDATE presence
     SET recent_weight = (SELECT SUM(weight)
@@ -507,7 +510,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                          WHERE HUC12RNG = presence.strHUC12RNG
                          GROUP BY HUC12RNG);
 
-    ALTER TABLE presence ADD COLUMN historical_weight INTEGER;
+    ALTER TABLE presence ADD COLUMN historical_weight INT;
 
     UPDATE presence
     SET historical_weight = (SELECT SUM(weight)
@@ -549,7 +552,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
 
     ############################  Record which hucs have sufficient evidence
     ########################################################################
-    sql="""/*  Mark records/hucs that have sufficient evidence*/
+    sql="""/* Mark records/hucs that have sufficient evidence */
     UPDATE presence
     SET documented_recent = 1
     WHERE recent_weight >= 10;
@@ -598,7 +601,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     INSERT INTO all_big_nuff SELECT * FROM big_nuff_historical;
 
     /* Calculate years since record in a new column */
-    ALTER TABLE all_big_nuff ADD COLUMN years_since INTEGER;
+    ALTER TABLE all_big_nuff ADD COLUMN years_since INT;
 
     UPDATE all_big_nuff
     SET years_since = strftime('%Y', 'now') - strftime('%Y', occurrenceDate);
@@ -701,7 +704,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
                               AND 100;
 
     /*  How many occurrences in each huc that had an occurrence? */
-    ALTER TABLE sp_range ADD COLUMN weight_sum INTEGER;
+    ALTER TABLE sp_range ADD COLUMN weight_sum INT;
 
     UPDATE sp_range
     SET weight_sum = (SELECT SUM(weight)
@@ -721,7 +724,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
 
     /*############################  Does HUC contain enough weight?
     #############################################################*/
-    ALTER TABLE sp_range ADD COLUMN eval INTEGER;
+    ALTER TABLE sp_range ADD COLUMN eval INT;
 
     /*  Record in sp_range that gap and gbif agreed on species presence, in light
     of the minimum weight of 10 */
@@ -744,7 +747,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
     #############################################################*/
     /*  Populate a validation column.  If an evaluation supports the GAP ranges
     then it is validated */
-    ALTER TABLE sp_range ADD COLUMN validated_presence INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sp_range ADD COLUMN validated_presence INT NOT NULL DEFAULT 0;
 
     UPDATE sp_range
     SET validated_presence = 1

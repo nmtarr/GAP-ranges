@@ -13,12 +13,7 @@ connection.enable_load_extension(True)
 cursor.execute('SELECT load_extension("mod_spatialite");')
 
 sql="""
-/* NOTE:  The order of these statements matters and reflects their rank */
-UPDATE presence SET presence_2020v1 = predicted_presence;
-/* Reclass some values */
-UPDATE presence SET presence_2020v1 = 3 WHERE presence_2020v1 in (1,2,3);
-UPDATE presence SET presence_2020v1 = 2 WHERE documented_historical=1;
-UPDATE presence SET presence_2020v1 = 1 WHERE documented_recent=1;
+SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'MULTIPOLYGON', 'XY');
 """
 try:
     cursor.executescript(sql)
