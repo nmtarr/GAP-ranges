@@ -17,10 +17,18 @@ outDir = 'P:/Proj3/USGap/Vert/USRanges/2020v1/Results/'
 gap_id = 'mstskx'
 
 sql="""
-SELECT ExportSHP('presence', 'geom_4326', '{0}{1}2020v1_4326', 'utf-8');
+DROP TABLE out;
+CREATE TABLE out AS SELECT CastToPolygon(geom_4326) AS geom_4326, presence_2020v1 AS presence
+                    FROM presence;
+
+SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'MULTIPOLYGON', 'XY');
+SELECT ExportSHP('out', 'geom_4326', '{0}{1}out', 'utf-8');
 """.format(outDir, gap_id)
+
 try:
     cursor.executescript(sql)
-    print('Exported shapefile : ' + str(datetime.now() - time1))
 except Exception as e:
     print(e)
+
+connection.commit()
+connection.close()

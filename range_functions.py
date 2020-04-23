@@ -17,10 +17,36 @@ RangeCodesDict2001 = {"Presence": {1: "Known/extant",
 RangeCodesDict2020 = {"Presence": {1: "Documented presence",
                                    2: "Documented historically presence",
                                    3: "Predicted presence",
-                                   4: "Extirpated/historical presence",
-                                   5: "Extirpated purposely (applies to introduced species only)",
-                                   6: "Occurs on indicated island chain",
+                                   4: "Predicted extirpated/historical presence",
+                                   5: "Predicted extirpated purposely (applies to introduced species only)",
+                                   6: "Predicted occurs on indicated island chain",
                                    7: "Unknown"}}
+def NB_get_filter_sets(occ_dbs):
+    '''
+    For the notebook.  Pulls names of filter sets used in the acquisition of
+    occurrence records.
+    '''
+    import sqlite3
+    ids = set([])
+    r_s = set([])
+    f_s = set([])
+    for db in occ_dbs:
+        connection = sqlite3.connect(db)
+        req_id = connection.execute("""SELECT DISTINCT request_id
+                                       FROM occurrences;""").fetchall()[0]
+        filt_id = connection.execute("""SELECT DISTINCT filter_id
+                                        FROM occurrences;""").fetchall()[0]
+        r_s = r_s | set(req_id)
+        f_s = f_s | set(filt_id)
+        ids = ids | set(req_id) | set(filt_id)
+        del connection
+    filters_request = list(r_s)
+    filters_post = list(f_s)
+    ids = tuple(ids)
+    filter_sets = ids[0]
+    for i in ids[1:]:
+        filter_sets = filter_sets + ', ' + i
+    return (filter_sets, filters_request, filters_post)
 
 def getRecordDetails(key):
     """
@@ -88,7 +114,7 @@ def MapShapefilePolygons(map_these, title):
 
     NOTE: The shapefiles have to be in WGS84 CRS.
 
-    (dict, str) -> displays maps, returns matplotlib.pyplot figure
+    (list, str) -> displays maps, returns matplotlib.pyplot figure
 
     Arguments:
     map_these -- list of dictionaries for shapefiles you want to display in
@@ -275,22 +301,20 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     DROP TABLE garb;
     """
     cursorQ.executescript(sql1)
-
     # Table to use for evaluations, renamed from 'presence' 14April2020.
     sql2 = """
-    CREATE TABLE present_2001v1 AS SELECT range_2001v1.strHUC12RNG, shucs.geom_5070
+    CREATE TABLE presence_2001v1 AS SELECT range_2001v1.strHUC12RNG, shucs.geom_5070
                              FROM range_2001v1 LEFT JOIN shucs
-                                               ON range_2001v1.strHUC12RNG = shucs.HUC12RNG
-                             WHERE range_2001v1.intGAPPresence = 1;
+                                               ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
 
     /* Transform to 4326 for displaying purposes*/
-    ALTER TABLE present_2001v1 ADD COLUMN geom_4326 INTEGER;
+    ALTER TABLE presence_2001v1 ADD COLUMN geom_4326 INTEGER;
 
-    UPDATE present_2001v1 SET geom_4326 = Transform(geom_5070, 4326);
+    UPDATE presence_2001v1 SET geom_4326 = Transform(geom_5070, 4326);
 
-    SELECT RecoverGeometryColumn('present_2001v1', 'geom_4326', 4326, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('presence_2001v1', 'geom_4326', 4326, 'POLYGON', 'XY');
 
-    SELECT ExportSHP('present_2001v1', 'geom_4326', '{0}{1}_present2001_4326', 'utf-8');
+    SELECT ExportSHP('presence_2001v1', 'geom_4326', '{0}{1}_presence2001_4326', 'utf-8');
     """.format(outDir, gap_id)
     cursorQ.executescript(sql2)
 
@@ -302,7 +326,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
                              FROM range_2001v1 LEFT JOIN shucs
                                                ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
 
-    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'POLYGON',
+    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
 
     /* Transform to 4326 for displaying purposes*/
@@ -310,12 +334,16 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
 
     UPDATE presence SET geom_4326 = Transform(geom_5070, 4326);
 
-    SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON',
+                                 'XY');
 
     SELECT ExportSHP('presence', 'geom_4326', '{0}{1}_presence_4326', 'utf-8');
 
     """.format(outDir, gap_id)
-    cursorQ.executescript(sql3)
+    try:
+        cursorQ.executescript(sql3)
+    except Exception as e:
+        print(e)
     conn.commit()
     conn.close()
     del cursorQ
@@ -425,7 +453,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                                  'MULTIPOLYGON', 'XY');"""
     try:
         cursor.executescript(sql)
-        print("Found hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
+        print("Found hucs that intersect a historical occurrence: " + str(datetime.now()-time1))
     except Exception as e:
         print("!! FAILED to find hucs that intersect a recent occurrence: " + str(datetime.now()-time1))
         print(e)
@@ -458,6 +486,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     big_nuff_historical -- records from table intersected_historical that have
             enough overlap to attribute to a huc.
     """
+    time1 = datetime.now()
     sql="""
     CREATE TABLE big_nuff_recent AS
       SELECT intersected_recent.HUC12RNG,
@@ -493,14 +522,13 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     """.format(eval_id, gap_id)
     try:
         cursor.executescript(sql)
-        time2 = datetime.now()
-        print('Determined which records overlap enough: ' + str(time2 - time1))
+        print('Determined which records overlap enough: ' + str(datetime.now() - time1))
     except Exception as e:
-        time2 = datetime.now()
         print(e)
 
     ################################ Add summed weight column
     # Column to make note of hucs in presence that have enough evidence
+    time1 = datetime.now()
     sql="""
     ALTER TABLE presence ADD COLUMN recent_weight INT;
 
@@ -519,15 +547,14 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                              GROUP BY HUC12RNG);"""
     try:
         cursor.executescript(sql)
-        time3 = datetime.now()
-        print('Determined weight of recent evidence for hucs : ' + str(time3 - time2))
+        print('Calculated total weight of evidence for each huc : ' + str(datetime.now() - time1))
     except Exception as e:
-        time3 = datetime.now()
         print(e)
 
 
     # Find hucs that contained gbif occurrences, but were not in gaprange and
     # insert them into sp_range as new records.
+    time1 = datetime.now()
     sql="""
     INSERT INTO presence (strHUC12RNG, recent_weight)
                 SELECT big_nuff_recent.HUC12RNG, SUM(big_nuff_recent.weight)
@@ -543,15 +570,14 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
                 WHERE presence.strHUC12RNG IS NULL
                 GROUP BY big_nuff_historical.HUC12RNG;"""
     try:
-        time3 = datetime.now()
         cursor.executescript(sql)
-        print('Added rows for hucs with enough weight but not in GAP range : ' + str(datetime.now() - time3))
+        print('Added rows for hucs with enough weight but not in GAP range : ' + str(datetime.now() - time1))
     except Exception as e:
-        time3 = datetime.now()
         print(e)
 
     ############################  Record which hucs have sufficient evidence
     ########################################################################
+    time1 = datetime.now()
     sql="""/* Mark records/hucs that have sufficient evidence */
     UPDATE presence
     SET documented_recent = 1
@@ -562,16 +588,14 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     WHERE historical_weight >= 10;
     """
     try:
-        time4 = datetime.now()
         cursor.executescript(sql)
-        time5 = datetime.now()
-        print('Filled out documented_recent column in presence table : ' + str(time5 - time4))
+        print('Filled out documented presence columns : ' + str(datetime.now() - time1))
     except Exception as e:
-        time3 = datetime.now()
         print(e)
 
     ##########################################  Fill out new presence column
     ########################################################################
+    time1 = datetime.now()
     sql="""
     /* NOTE:  The order of these statements matters and reflects their rank */
     UPDATE presence SET presence_2020v1 = predicted_presence;
@@ -584,16 +608,15 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     UPDATE presence SET presence_2020v1 = 1 WHERE documented_recent=1;
     """
     try:
-        time1 = datetime.now()
         cursor.executescript(sql)
-        print('Filled out new presence column : ' + str(datetime.now() - time1))
+        print('Determined 2020v1 range presence value : ' + str(datetime.now() - time1))
     except Exception as e:
-        time1 = datetime.now()
         print(e)
 
 
     #####################################  Calculate years since last record
     ########################################################################
+    time1 = datetime.now()
     sql="""
     /* Combine big nuff tables into one */
     CREATE TABLE all_big_nuff AS SELECT * FROM big_nuff_recent;
@@ -612,19 +635,74 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     				  FROM all_big_nuff
     				  WHERE HUC12RNG = presence.strHUC12RNG
     				  GROUP BY HUC12RNG);
+
+    /* Update layer statistics or else not all columns will show up in QGIS */
+    SELECT UpdateLayerStatistics('presence');
     """
     try:
-        time1 = datetime.now()
         cursor.executescript(sql)
-        print('Filled out new presence column : ' + str(datetime.now() - time1))
+        print('Determined age of last occurrence : ' + str(datetime.now() - time1))
     except Exception as e:
-        time1 = datetime.now()
+        print(e)
+
+    #####################################  Export shapefile for notebook (4326)
+    ########################################################################
+    time1 = datetime.now()
+    sql="""
+    SELECT ExportSHP('presence', 'geom_4326', '{0}{1}2020v1_4326', 'utf-8');
+    """.format(outDir, gap_id)
+    try:
+        cursor.executescript(sql)
+        print('Exported shapefile : ' + str(datetime.now() - time1))
+    except Exception as e:
         print(e)
 
     conn.commit()
     conn.close()
 
-'''
+def cleanup_eval_db(eval_db):
+    '''
+    Drob excess tables and columns to reduce file size.
+    '''
+    from datetime import datetime
+    time1 = datetime.now()
+    cursor, conn = spatialite(eval_db)
+    sql="""
+    DROP TABLE all_big_nuff;
+    DROP TABLE big_nuff_historical;
+    DROP TABLE big_nuff_recent;
+    DROP TABLE historical_records;
+    DROP TABLE recent_records;
+    DROP TABLE intersected_historical;
+    DROP TABLE intersected_recent;
+    DROP TABLE shucs;
+    DROP TABLE presence_2001v1;
+    DROP TABLE range_2001v1;
+
+    /* Get rid of the geom_4326 column */
+    CREATE TABLE IF NOT EXISTS new_pres AS
+                SELECT strHUC12RNG, predicted_presence, documented_historical,
+                       documented_recent, age_of_last, presence_2020v1,
+                       geom_5070);
+
+    DROP TABLE presence;
+
+    ALTER TABLE new_pres RENAME TO presence;
+
+    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'MULTIPOLYGON',
+                                 'XY');
+    """.format(outDir, gap_id)
+    try:
+        cursor.executescript(sql)
+        print('Deleted excess tables and columns : ' + str(datetime.now() - time1))
+    except Exception as e:
+        print(e)
+
+    conn.commit()
+    conn.close()
+
+
+
 def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
     """
     Uses occurrence data collected with the wildlife-wrangler repo
@@ -764,7 +842,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
 
     ALTER TABLE new_range ADD COLUMN geom_4326 INTEGER;
 
-    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('new_range', 'geom_5070', 5070, 'MULTIPOLYGON', 'XY');
 
     UPDATE new_range SET geom_4326 = Transform(geom_5070, 4326);
 
@@ -779,7 +857,7 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
                   FROM new_range
                   WHERE eval >= 0;
 
-    SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'POLYGON', 'XY');
+    SELECT RecoverGeometryColumn('eval', 'geom_4326', 4326, 'MULTIPOLYGON', 'XY');
 
     SELECT ExportSHP('eval', 'geom_4326', '{2}{1}_eval', 'utf-8');
 
@@ -799,5 +877,3 @@ def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir)
 
     conn.commit()
     conn.close()
-
-'''
