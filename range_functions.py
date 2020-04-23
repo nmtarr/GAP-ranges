@@ -48,7 +48,7 @@ def NB_get_filter_sets(occ_dbs):
         filter_sets = filter_sets + ', ' + i
     return (filter_sets, filters_request, filters_post)
 
-def NB_insert_records(years, months, occ_dbs, eval_db):
+def NB_insert_records(years, months, occ_dbs, summary_name, outDir, eval_db):
     '''
     For the notebook.  Gets records from occurrence dbs and puts
     them into the evaluation db.
@@ -57,7 +57,7 @@ def NB_insert_records(years, months, occ_dbs, eval_db):
         print(occ_db)
 
         # Connect to the evaluation occurrence records database
-        cursor, evconn = functions.spatialite(eval_db)
+        cursor, evconn = spatialite(eval_db)
 
         # Attach occurrence database
         cursor.execute("ATTACH DATABASE ? AS occs;", (occ_db,))
@@ -692,7 +692,11 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     ########################################################################
     time1 = datetime.now()
     sql="""
-    SELECT ExportSHP('presence', 'geom_4326', '{0}{1}2020v1_4326', 'utf-8');
+    CREATE TABLE out AS SELECT geom_4326, age_of_last AS age, presence_2020v1 AS presence,
+                        FROM presence;
+    SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'POLYGON', 'XY');
+    SELECT ExportSHP('out', 'geom_4326', '{0}{1}NB', 'utf-8');
+    DROP TABLE out;
     """.format(outDir, gap_id)
     try:
         cursor.executescript(sql)
@@ -743,8 +747,6 @@ def cleanup_eval_db(eval_db):
 
     conn.commit()
     conn.close()
-
-
 
 def evaluate_GAP_range(eval_id, gap_id, eval_db, parameters_db, outDir, codeDir):
     """
