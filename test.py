@@ -21,7 +21,7 @@ DROP TABLE out;
 CREATE TABLE out AS SELECT CastToPolygon(geom_4326) AS geom_4326, presence_2020v1 AS presence
                     FROM presence;
 
-SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'MULTIPOLYGON', 'XY');
+SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'POLYGON', 'XY');
 SELECT ExportSHP('out', 'geom_4326', '{0}{1}out', 'utf-8');
 """.format(outDir, gap_id)
 

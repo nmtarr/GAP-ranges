@@ -48,6 +48,49 @@ def NB_get_filter_sets(occ_dbs):
         filter_sets = filter_sets + ', ' + i
     return (filter_sets, filters_request, filters_post)
 
+def NB_insert_records(years, months, occ_dbs, eval_db):
+    '''
+    For the notebook.  Gets records from occurrence dbs and puts
+    them into the evaluation db.
+    '''
+    for occ_db in occ_dbs:
+        print(occ_db)
+
+        # Connect to the evaluation occurrence records database
+        cursor, evconn = functions.spatialite(eval_db)
+
+        # Attach occurrence database
+        cursor.execute("ATTACH DATABASE ? AS occs;", (occ_db,))
+
+        # Create table of occurrences that fit within evaluation parameters  --  IF EXISTS JUST APPEND
+        if occ_db == occ_dbs[0]:
+            cursor.execute("""CREATE TABLE evaluation_occurrences AS
+                           SELECT * FROM occs.occurrences
+                           WHERE STRFTIME('%Y', OccurrenceDate) IN {0}
+                           AND STRFTIME('%m', OccurrenceDate) IN {1};""".format(years, months))
+        else:
+            cursor.execute("""INSERT INTO evaluation_occurrences
+                              SELECT * FROM occs.occurrences
+                              WHERE STRFTIME('%Y', OccurrenceDate) IN {0}
+                              AND STRFTIME('%m', OccurrenceDate) IN {1};""".format(years, months))
+
+    # Export occurrence circles as a shapefile (all seasons)
+    cursor.execute("""SELECT RecoverGeometryColumn('evaluation_occurrences', 'polygon_4326',
+                      4326, 'POLYGON', 'XY');""")
+    sql = """SELECT ExportSHP('evaluation_occurrences', 'polygon_4326', ?, 'utf-8');"""
+    subs = outDir + summary_name + "_circles"
+    cursor.execute(sql, (subs,))
+    '''
+    # Export occurrence 'points' as a shapefile (all seasons)
+    cursor.execute("""SELECT RecoverGeometryColumn('evaluation_occurrences', 'geom_xy4326',
+                      4326, 'POINT', 'XY');""")
+    subs = outDir + summary_name + "_points"
+    cursor.execute("""SELECT ExportSHP('evaluation_occurrences', 'geom_xy4326', ?, 'utf-8');""", (subs,))
+    '''
+    # Close db
+    evconn.commit()
+    evconn.close()
+
 def getRecordDetails(key):
     """
     Returns a dictionary holding all GBIF details about the record.
@@ -326,7 +369,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
                              FROM range_2001v1 LEFT JOIN shucs
                                                ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
 
-    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'MULTIPOLYGON',
+    SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'POLYGON',
                                  'XY');
 
     /* Transform to 4326 for displaying purposes*/
