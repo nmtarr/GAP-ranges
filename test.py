@@ -24,8 +24,10 @@ SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'POLYGON', 'XY');
 SELECT ExportSHP('out', 'geom_4326', '{0}{1}out', 'utf-8');
 """.format(outDir, gap_id)
 
+sql = """SELECT GeometryType(geom_4326) FROM presence WHERE age_of_last = 17;"""
 try:
-    cursor.executescript(sql)
+    a = cursor.execute(sql).fetchall()
+    print(a)
 except Exception as e:
     print(e)
 

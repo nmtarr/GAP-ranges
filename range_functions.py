@@ -391,8 +391,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     conn.close()
     del cursorQ
 
-def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
-                         outDir, codeDir):
+def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, outDir, codeDir):
     """
     Uses occurrence data collected with the wildlife-wrangler repo
     to build an updated GAP range map for a species.  The previous GAP range
@@ -688,11 +687,26 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db,
     except Exception as e:
         print(e)
 
+    ################################  Fill in geometry values for "new" HUCs
+    ########################################################################
+    sql = """UPDATE presence
+    SET geom_5070 = (SELECT geom_5070 FROM shucs WHERE strHUC12RNG = shucs.HUC12RNG)
+    WHERE geom_5070 IS NULL;
+
+    UPDATE presence
+    SET geom_4326 = Transform(geom_5070, 4326)
+    WHERE geom_4326 IS NULL;"""
+    
+    try:
+        cursor.executescript(sql)
+    except Exception as e:
+        print(e)
+
     #####################################  Export shapefile for notebook (4326)
     ########################################################################
     time1 = datetime.now()
     sql="""
-    CREATE TABLE out AS SELECT geom_4326, age_of_last AS age, presence_2020v1 AS presence,
+    CREATE TABLE out AS SELECT geom_4326, age_of_last AS age, presence_2020v1 AS presence
                         FROM presence;
     SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'POLYGON', 'XY');
     SELECT ExportSHP('out', 'geom_4326', '{0}{1}NB', 'utf-8');
@@ -738,7 +752,7 @@ def cleanup_eval_db(eval_db):
 
     SELECT RecoverGeometryColumn('presence', 'geom_5070', 5070, 'MULTIPOLYGON',
                                  'XY');
-    """.format(outDir, gap_id)
+    """
     try:
         cursor.executescript(sql)
         print('Deleted excess tables and columns : ' + str(datetime.now() - time1))
