@@ -187,8 +187,7 @@ def MapShapefilePolygons(map_these, title):
     # Basemap
     fig = plt.figure(figsize=(15,12))
     ax = plt.subplot(1,1,1)
-    map = Basemap(projection='aea', resolution='l', lon_0=-95.5, lat_0=39.0,
-                  height=3200000, width=5000000)
+    map = Basemap(projection='aea', resolution='l', lon_0=-95.5, lat_0=39.0, height=3200000, width=5000000)
     map.drawcoastlines(color='grey')
     map.drawstates(color='grey')
     map.drawcountries(color='grey')
@@ -678,6 +677,9 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
     				  WHERE HUC12RNG = presence.strHUC12RNG
     				  GROUP BY HUC12RNG);
 
+    /* Replace null values with a dummy value */
+    UPDATE presence SET age_of_last = 999 WHERE age_of_last IS NULL;
+
     /* Update layer statistics or else not all columns will show up in QGIS */
     SELECT UpdateLayerStatistics('presence');
     """
@@ -695,8 +697,10 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
 
     UPDATE presence
     SET geom_4326 = Transform(geom_5070, 4326)
-    WHERE geom_4326 IS NULL;"""
-    
+    WHERE geom_4326 IS NULL;
+
+    SELECT RecoverGeometryColumn('presence', 'geom_4326', 4326, 'POLYGON', 'XY');"""
+
     try:
         cursor.executescript(sql)
     except Exception as e:
@@ -744,7 +748,8 @@ def cleanup_eval_db(eval_db):
     CREATE TABLE IF NOT EXISTS new_pres AS
                 SELECT strHUC12RNG, predicted_presence, documented_historical,
                        documented_recent, age_of_last, presence_2020v1,
-                       geom_5070);
+                       geom_5070
+                FROM presence;
 
     DROP TABLE presence;
 
