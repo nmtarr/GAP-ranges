@@ -1,3 +1,11 @@
+RangeCodesDict2020 = {"Presence": {1: "Confirmed present",
+                                   2: "Likely present",
+                                   3: "Suspected present",
+                                   4: "Suspected absent",
+                                   5: "Likely absent"},
+                      "Season": {0: "Year-round",
+                                 }}
+
 RangeCodesDict2001 = {"Presence": {1: "Known/extant",
                                    2: "Possibly present",
                                    3: "Potential for presence",
@@ -5,6 +13,8 @@ RangeCodesDict2001 = {"Presence": {1: "Known/extant",
                                    5: "Extirpated purposely (applies to introduced species only)",
                                    6: "Occurs on indicated island chain",
                                    7: "Unknown"},
+
+
                 "Origin": {1: "Native", 2: "Introduced", 3: "Either introducted or native",
                            4: "Reintroduced", 5: "Either introduced or reintroduced",
                            6: "Vagrant", 7: "Unknown"},
@@ -14,13 +24,6 @@ RangeCodesDict2001 = {"Presence": {1: "Known/extant",
                             5: "Passage migrant or wanderer", 6: "Seasonal permanence uncertain",
                             7: "Unknown", 8: "Vagrant"}}
 
-RangeCodesDict2020 = {"Presence": {1: "Documented presence",
-                                   2: "Documented historically presence",
-                                   3: "Predicted presence",
-                                   4: "Predicted extirpated/historical presence",
-                                   5: "Predicted extirpated purposely (applies to introduced species only)",
-                                   6: "Predicted occurs on indicated island chain",
-                                   7: "Unknown"}}
 def NB_get_filter_sets(occ_dbs):
     '''
     For the notebook.  Pulls names of filter sets used in the acquisition of
