@@ -3,8 +3,22 @@ RangeCodesDict2020 = {"Presence": {1: "Confirmed present",
                                    3: "Suspected present",
                                    4: "Suspected absent",
                                    5: "Likely absent"},
-                      "Season": {0: "Year-round",
-                                 }}
+                      "Season": {"y": "Year-round",
+                                 "s": "Summer",
+                                 "w": "Winter",
+                                 "1": "January",
+                                 "2": "February",
+                                 "3": "March",
+                                 "4": "April",
+                                 "5": "May",
+                                 "6": "June",
+                                 "7": "July",
+                                 "8": "August",
+                                 "9": "September",
+                                 "10": "October",
+                                 "11": "November",
+                                 "12": "December"}}
+
 
 RangeCodesDict2001 = {"Presence": {1: "Known/extant",
                                    2: "Possibly present",
@@ -366,7 +380,7 @@ def make_evaluation_db(eval_db, gap_id, inDir, outDir, shucLoc):
     # Create a table to store presence information for range compilations.
     sql3 = """
     CREATE TABLE presence AS SELECT range_2001v1.strHUC12RNG,
-                                    range_2001v1.intGAPPresence AS predicted_presence,
+                                    range_2001v1.intGAPPresence AS presence_2001v1,
                                     shucs.geom_5070
                              FROM range_2001v1 LEFT JOIN shucs
                                                ON range_2001v1.strHUC12RNG = shucs.HUC12RNG;
@@ -430,7 +444,8 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
     sql="""
     ALTER TABLE presence ADD COLUMN documented_historical INT;
     ALTER TABLE presence ADD COLUMN documented_recent INT;
-    ALTER TABLE presence ADD COLUMN age_of_last INT;
+    ALTER TABLE presence ADD COLUMN yrs_since_record INT;
+    ALTER TABLE presence ADD COLUMN age_of_basis INT;
     ALTER TABLE presence ADD COLUMN presence_2020v1 INT;
     """
     try:
@@ -642,12 +657,12 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
     time1 = datetime.now()
     sql="""
     /* NOTE:  The order of these statements matters and reflects their rank */
-    UPDATE presence SET presence_2020v1 = predicted_presence;
+    UPDATE presence SET presence_2020v1 = presence_2001v1;
 
     /* Reclass some values */
     UPDATE presence SET presence_2020v1 = 3 WHERE presence_2020v1 in (1,2,3);
 
-    UPDATE presence SET presence_2020v1 = 2 WHERE documented_historical=1;
+    UPDATE presence SET presence_2020v1 = 3 WHERE documented_historical=1;
 
     UPDATE presence SET presence_2020v1 = 1 WHERE documented_recent=1;
     """
@@ -675,13 +690,13 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
 
     /* Choose first in a group by HUC12RNG */
     UPDATE presence
-    SET age_of_last = (SELECT MIN(years_since)
+    SET yrs_since_record = (SELECT MIN(years_since)
     				  FROM all_big_nuff
     				  WHERE HUC12RNG = presence.strHUC12RNG
     				  GROUP BY HUC12RNG);
 
     /* Replace null values with a dummy value */
-    UPDATE presence SET age_of_last = 999 WHERE age_of_last IS NULL;
+    UPDATE presence SET yrs_since_record = 999 WHERE yrs_since_record IS NULL;
 
     /* Update layer statistics or else not all columns will show up in QGIS */
     SELECT UpdateLayerStatistics('presence');
@@ -713,7 +728,7 @@ def compile_GAP_presence(eval_id, gap_id, eval_db, cutoff_year, parameters_db, o
     ########################################################################
     time1 = datetime.now()
     sql="""
-    CREATE TABLE out AS SELECT geom_4326, age_of_last AS age, presence_2020v1 AS presence
+    CREATE TABLE out AS SELECT geom_4326, yrs_since_record AS age, presence_2020v1 AS presence
                         FROM presence;
     SELECT RecoverGeometryColumn('out', 'geom_4326', 4326, 'POLYGON', 'XY');
     SELECT ExportSHP('out', 'geom_4326', '{0}{1}NB', 'utf-8');
@@ -749,8 +764,8 @@ def cleanup_eval_db(eval_db):
 
     /* Get rid of the geom_4326 column */
     CREATE TABLE IF NOT EXISTS new_pres AS
-                SELECT strHUC12RNG, predicted_presence, documented_historical,
-                       documented_recent, age_of_last, presence_2020v1,
+                SELECT strHUC12RNG, presence_2001v1, documented_historical,
+                       documented_recent, yrs_since_record, presence_2020v1,
                        geom_5070
                 FROM presence;
 
